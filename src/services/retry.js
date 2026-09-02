@@ -142,10 +142,12 @@ export function backoffDelayMs(
 }
 
 /**
- * Sleeps without holding the process open.
+ * Sleeps for a duration, resolving reliably.
  *
- * The timer is unref'd so a pending backoff cannot delay shutdown: SIGTERM
- * proceeds immediately rather than waiting out a thirty-second wait.
+ * The timer is ref'd. An earlier version unref'd it to avoid delaying shutdown, but that
+ * makes the promise never settle when nothing else keeps the event loop alive — turning an
+ * intended fast exit into a hung await. Shutdown is bounded by the failsafe timer in
+ * src/index.js instead.
  *
  * @param {number} ms
  * @returns {Promise<void>}
@@ -155,8 +157,22 @@ export function sleep(ms) {
   if (duration === 0) return Promise.resolve();
 
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, duration);
-    if (typeof timer.unref === 'function') timer.unref();
+    /**
+     * The timer is deliberately NOT unref'd.
+     *
+     * An unref'd timer does not hold the event loop open, so when this sleep is the only
+     * pending work the loop drains and this promise never settles — the caller's await hangs
+     * forever rather than proceeding. Node reports it as
+     * "Promise resolution is still pending but the event loop has already resolved".
+     *
+     * unref() would not cancel the wait, which was the original intent. Shutdown is already
+     * bounded by the failsafe timer in src/index.js, so a ref'd timer here cannot delay
+     * SIGTERM beyond that ceiling.
+     *
+     * Contrast startSessionSweeper, where unref() IS correct: nothing awaits that interval,
+     * so a dropped tick costs nothing.
+     */
+    setTimeout(resolve, duration);
   });
 }
 

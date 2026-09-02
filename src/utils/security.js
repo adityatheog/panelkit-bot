@@ -197,7 +197,13 @@ export function buildPanelAccountUrl(panelUrl) {
  */
 export function createSessionDescriptor(ownerId, data = {}, ttlMs = DEFAULT_SESSION_TTL_MS) {
   const now = Date.now();
-  const lifetime = Number.isFinite(Number(ttlMs)) ? Number(ttlMs) : DEFAULT_SESSION_TTL_MS;
+  /**
+   * A type check rather than Number(ttlMs), because Number(null) is 0 and 0 is finite — so a
+   * null TTL would give the session an expiry equal to its creation time, expired on the
+   * first read. An explicit 0 or a negative value is still honoured, which is how a test
+   * produces an already-expired session.
+   */
+  const lifetime = typeof ttlMs === 'number' && Number.isFinite(ttlMs) ? ttlMs : DEFAULT_SESSION_TTL_MS;
   return {
     id: newSessionId(),
     ownerId: String(ownerId),

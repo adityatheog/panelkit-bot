@@ -336,12 +336,14 @@ describe('pagination', () => {
      */
     const first = rows(view('Server', 0))[2].components;
 
+    // paginationRow always calls setDisabled, so the key is present in the JSON either way —
+    // discord.js does not omit it when false.
     assert.equal(first[0].disabled, true, 'Previous is disabled on the first page');
-    assert.equal(first[1].disabled, undefined, 'Next is enabled on the first page');
+    assert.equal(first[1].disabled, false, 'Next is enabled on the first page');
 
     const last = rows(view('Server', 1))[2].components;
 
-    assert.equal(last[0].disabled, undefined, 'Previous is enabled on the last page');
+    assert.equal(last[0].disabled, false, 'Previous is enabled on the last page');
     assert.equal(last[1].disabled, true, 'Next is disabled on the last page');
   });
 
@@ -420,7 +422,7 @@ describe('the category select menu', () => {
     assert.equal(defaults[0].value, 'Files');
   });
 
-  test('stays within Discord's option limit', () => {
+  test("stays within Discord's option limit", () => {
     assert.ok(rows(view('Account'))[0].components[0].options.length <= MAX_SELECT_OPTIONS);
   });
 });
@@ -449,7 +451,7 @@ describe('the command detail select menu', () => {
     const select = rows(view('Account'))[1].components[0];
     const option = select.options.find((entry) => entry.value === 'account create');
 
-    assert.ok(option.description.length <= 100, 'must fit Discord's option description limit');
+    assert.ok(option.description.length <= 100, "must fit Discord's option description limit");
   });
 });
 
@@ -485,7 +487,7 @@ describe('component custom ids', () => {
     ]);
   });
 
-  test('stays within Discord's custom id length limit', () => {
+  test("stays within Discord's custom id length limit", () => {
     for (const row of rows(view('Server'))) {
       for (const component of row.components) {
         assert.ok(component.custom_id.length <= 100, `${component.custom_id} is too long`);

@@ -147,7 +147,10 @@ export function touchSession(id, ttlMs = DEFAULT_SESSION_TTL_MS) {
   const session = getSession(id);
   if (!session) return false;
 
-  session.expiresAt = Date.now() + (Number.isFinite(Number(ttlMs)) ? Number(ttlMs) : DEFAULT_SESSION_TTL_MS);
+  // A type check, for the same reason as createSessionDescriptor: Number(null) is 0.
+  const lifetime = typeof ttlMs === 'number' && Number.isFinite(ttlMs) ? ttlMs : DEFAULT_SESSION_TTL_MS;
+
+  session.expiresAt = Date.now() + lifetime;
   return true;
 }
 

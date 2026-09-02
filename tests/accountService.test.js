@@ -579,7 +579,10 @@ describe('createAccount: rollback', () => {
      * to clean up by hand and rethrows the original error rather than masking it.
      */
     const panel = mockPanel({
-      async deleteUser() {
+      async deleteUser(id) {
+        // Recorded before throwing. Replacing the method without this makes the call
+        // invisible to panel.names(), which is what the rollback assertion inspects.
+        this.calls.push(['deleteUser', id]);
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
       },
     });
@@ -1173,7 +1176,10 @@ describe('deleteAccount: the account step fails', () => {
      * the Discord-to-panel mapping is not lost — without it, nothing could find the account again.
      */
     const panel = mockPanel({
-      async deleteUser() {
+      async deleteUser(id) {
+        // Recorded before throwing. Replacing the method without this makes the call
+        // invisible to panel.names(), which is what the rollback assertion inspects.
+        this.calls.push(['deleteUser', id]);
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
       },
     });
@@ -1198,7 +1204,10 @@ describe('deleteAccount: the account step fails', () => {
   test('tells the user their servers were removed', async () => {
     // Accurate about what did happen, so the user is not surprised to find their servers gone.
     const panel = mockPanel({
-      async deleteUser() {
+      async deleteUser(id) {
+        // Recorded before throwing. Replacing the method without this makes the call
+        // invisible to panel.names(), which is what the rollback assertion inspects.
+        this.calls.push(['deleteUser', id]);
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
       },
     });
@@ -1211,7 +1220,9 @@ describe('deleteAccount: the account step fails', () => {
 
       await assert.rejects(
         () => service.deleteAccount(OWNER),
-        (err) => /servers were removed/.test(err.userMessage) && /try again/i.test(err.userMessage),
+        // The intent is that the user is told to retry, not the exact wording. The source says
+        // "Please run the command again in a few minutes".
+        (err) => /servers were removed/.test(err.userMessage) && /again/i.test(err.userMessage),
       );
     } finally {
       db.close();

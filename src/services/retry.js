@@ -235,7 +235,11 @@ export async function withRetry(
       if (elapsedMs + delayMs > maxElapsedMs) throw err;
 
       if (typeof onRetry === 'function') {
-        onRetry({ attempt, status, code, delayMs });
+        try {
+          onRetry({ attempt, status, code, delayMs });
+        } catch {
+          // A logging failure must not replace the panel error the caller needs to see.
+        }
       }
 
       await sleep(delayMs);

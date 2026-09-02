@@ -445,16 +445,20 @@ export function createSlashContext({ interaction, command, registry, services, e
           return await interaction.editReply(body);
         }
 
-        const sent = await interaction.reply({
-          ...body,
-          ...(ephemeral ? { flags: MessageFlags.Ephemeral } : {}),
-          withResponse: true,
-        });
+        await interaction.reply(
+          ephemeral ? { ...body, flags: MessageFlags.Ephemeral } : body,
+        );
 
         if (ephemeral) deferredEphemeral = true;
 
-        // discord.js 14.16 returns an InteractionCallbackResponse for withResponse.
-        return sent?.resource?.message ?? null;
+        /**
+         * discord.js 14.16 returns an InteractionResponse here, not a Message.
+         * withResponse arrived in 14.17, so requesting it on the pinned version is
+         * silently ignored. Callers that need the message use anchorMessage(), which
+         * fetches it — so null is the honest answer rather than a value that is always
+         * undefined.
+         */
+        return null;
       } catch (err) {
         logger.warn('Could not deliver an interaction response', {
           command: command.name,

@@ -477,7 +477,7 @@ describe('parseSlashArgs', () => {
     assert.deepEqual(parseSlashArgs(SUSPEND_COMMAND, interaction), { user: '111111111111111111' });
   });
 
-  test('produces the project's own error for a missing required option', () => {
+  test("produces the project's own error for a missing required option", () => {
     /**
      * Every option is fetched as not-required, so an absent value produces this project's message
      * rather than a discord.js exception — which keeps the failure text identical across surfaces.
@@ -869,11 +869,16 @@ describe('the slash context', () => {
     assert.equal(editPayload.flags, undefined, 'an edit cannot carry the ephemeral flag');
   });
 
-  test('respond returns the sent message when Discord provides one', async () => {
+  test('respond returns null on a first reply; anchorMessage fetches the message', async () => {
+    /**
+     * discord.js 14.16 returns an InteractionResponse from reply(), not a Message. Callers
+     * that need the message use anchorMessage(), which fetches it — so respond() reports
+     * null rather than pretending to hand back something it cannot.
+     */
     const { ctx } = build();
 
-    const sent = await ctx.respond({ content: 'x' });
-    assert.equal(sent.id, 'reply-message-id');
+    assert.equal(await ctx.respond({ content: 'x' }), null);
+    assert.equal((await ctx.anchorMessage()).id, 'reply-message-id');
   });
 
   test('respond returns null rather than throwing when delivery fails', async () => {

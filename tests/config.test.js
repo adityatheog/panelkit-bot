@@ -184,11 +184,19 @@ describe('colours', () => {
     }
   });
 
-  test('substitutes a default for a malformed optional colour', () => {
-    const config = validateConfig(
-      baseConfig({ colors: { primary: '#2B2D31', error: '#ED4245', success: 'green' } }),
+  test('rejects a malformed optional colour rather than substituting a default', () => {
+    /**
+     * Absent and malformed are different cases. Absent means the operator did not configure
+     * the colour, so a default is right. Malformed means they tried and got it wrong, and
+     * silently substituting hides the typo — which is what config.js states as its intent.
+     */
+    assert.throws(
+      () => validateConfig(baseConfig({ colors: { primary: '#2B2D31', error: '#ED4245', success: 'green' } })),
+      ConfigError,
     );
 
+    // Absent still substitutes.
+    const config = validateConfig(baseConfig({ colors: { primary: '#2B2D31', error: '#ED4245' } }));
     assert.equal(config.colors.success, '#57F287');
   });
 });

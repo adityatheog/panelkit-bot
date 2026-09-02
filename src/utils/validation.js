@@ -65,9 +65,29 @@ const ABSOLUTE_PATH_RE = /^\/[^\0]*$/;
 /** The only power signals the Pterodactyl client API accepts. */
 const POWER_SIGNALS = Object.freeze(['start', 'stop', 'restart', 'kill']);
 
-/** Codepoints that must never survive into an embed or a panel payload. */
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARS_RE = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\uFEFF]/;
+/**
+ * Codepoints that must never survive into an embed or a panel payload.
+ *
+ * Beyond the C0 and C1 control ranges, this covers four invisible groups that are used for
+ * display spoofing rather than for text:
+ *
+ *   U+200B–200F  zero-width space, joiners, and the LRM/RLM marks
+ *   U+202A–202E  bidi embeddings and overrides — RLO reverses rendered text
+ *   U+2060–2064  word joiner and the invisible mathematical operators
+ *   U+2066–2069  bidi isolates
+ *
+ * Defined as a source string because two regexes are needed from it. A global regex is
+ * stateful across .test() calls through lastIndex, so the presence check and the stripping
+ * replace cannot share one instance.
+ */
+const CONTROL_CHARS_SOURCE =
+  '[\\u0000-\\u001F\\u007F-\\u009F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u2069\\u2028\\u2029\\uFEFF]';
+
+/** Non-global, for presence tests. Sharing a global instance here would be stateful. */
+const CONTROL_CHARS_RE = new RegExp(CONTROL_CHARS_SOURCE);
+
+/** Global, for stripping. Without the g flag, .replace removes only the first match. */
+const CONTROL_CHARS_GLOBAL_RE = new RegExp(CONTROL_CHARS_SOURCE, 'g');
 
 const SERVER_NAME_MIN = 3;
 const SERVER_NAME_MAX = 32;
@@ -325,6 +345,15 @@ export function assertValidInteger(raw, { name = 'value', min = Number.MIN_SAFE_
   const text = toSafeString(raw);
   if (text === '') throw new ValidationError(`\`${name}\` is required.`);
 
+  /**
+   * Plain decimal digits only.
+   *
+   * Number('1e3') is 1000 and Number('0x10') is 16, so a bare Number.isInteger check accepts
+   * scientific and hexadecimal notation for a page number. That is surprising rather than
+   * lenient. The slash surface sends a real Number, whose string form always matches.
+   */
+  if (!/^-?\d+$/.test(text)) throw new ValidationError(`\`${name}\` must be a whole number.`);
+
   const value = Number(text);
   if (!Number.isInteger(value)) throw new ValidationError(`\`${name}\` must be a whole number.`);
   if (value < min) throw new ValidationError(`\`${name}\` must be at least ${min}.`);
@@ -366,7 +395,8 @@ export function assertOneOf(raw, choices, { name = 'value' } = {}) {
  */
 export function sanitiseForDisplay(raw, maxLength = 256) {
   const value = toSafeString(raw)
-    .replace(CONTROL_CHARS_RE, '')
+    // The global pattern: the non-global one would strip only the first control character.
+    .replace(CONTROL_CHARS_GLOBAL_RE, '')
     .replace(/[`*_~|\\]/g, '')
     .replace(/@(everyone|here)/gi, '@\u200bthe$1')
     .replace(/<@(&?\d+)>/g, '<@\u200b$1>');

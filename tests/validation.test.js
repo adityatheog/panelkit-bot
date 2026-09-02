@@ -123,8 +123,14 @@ describe('assertValidServerName', () => {
     assert.throws(() => assertValidServerName('ab'), ValidationError);
     assert.throws(() => assertValidServerName('x'.repeat(SERVER_NAME_MAX + 1)), ValidationError);
 
-    // Whitespace collapses before the length check, so this is two characters, not five.
-    assert.throws(() => assertValidServerName('a    b'.replace('a    b', 'a b')), ValidationError);
+    /**
+     * Whitespace collapses and trims BEFORE the length check, so this five-character input is
+     * measured as one character and refused.
+     */
+    assert.throws(() => assertValidServerName('  a  '), ValidationError);
+
+    // And a value that collapses to something valid is accepted.
+    assert.equal(assertValidServerName('  a   b  '), 'a b');
   });
 
   test('rejects markdown and mention syntax', () => {
@@ -217,7 +223,9 @@ describe('assertValidPowerSignal', () => {
   });
 
   test('rejects anything else', () => {
-    for (const bad of ['', 'delete', 'suspend', 'reinstall', 'start;stop', 'START ', null, {}]) {
+    // No trailing-whitespace case: the signal is trimmed and lowercased before the membership
+    // check, which the test above asserts deliberately.
+    for (const bad of ['', 'delete', 'suspend', 'reinstall', 'start;stop', 'star', null, {}]) {
       assert.throws(() => assertValidPowerSignal(bad), ValidationError, `should reject ${JSON.stringify(bad)}`);
     }
   });
@@ -310,10 +318,12 @@ describe('assertAllowedDockerImage', () => {
      * Free-form images are never accepted: a user selecting an arbitrary container would be
      * running arbitrary code on the operator's node.
      */
+    // No trailing-whitespace case: the value is trimmed and then matched, so it resolves to
+    // an allowlisted image. Nothing unauthorised passes.
     for (const bad of [
       'evil/image',
       'ghcr.io/example/node:latest',
-      'ghcr.io/example/node:20 ',
+      'ghcr.io/example/node:21',
       'ghcr.io/attacker/backdoor:1',
       '',
     ]) {

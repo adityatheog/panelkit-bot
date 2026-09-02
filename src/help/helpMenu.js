@@ -293,13 +293,21 @@ export function buildHelpView({
   const safePage = Math.min(Math.max(0, Number(page) || 0), pages - 1);
   const visible = commandsForPage(category.commands, safePage, pageSize);
 
+  const commandLines =
+    visible.length > 0
+      ? buildCommandLines(visible, descriptionMax).join('\n')
+      : 'No commands in this category.';
+
+  /**
+   * Composed directly rather than through joinSections, which filters empty strings.
+   *
+   * That filtering is correct for optional sections — an omitted one should not leave a
+   * double gap — but it also swallows this deliberate separator, and the specified layout
+   * requires a blank line between the header and the list.
+   */
   const embed = infoEmbed(
     'Prefix Commands',
-    joinSections([
-      buildHeaderLine({ registry, prefix }),
-      '',
-      visible.length > 0 ? buildCommandLines(visible, descriptionMax).join('\n') : 'No commands in this category.',
-    ]),
+    `${buildHeaderLine({ registry, prefix })}\n\n${commandLines}`,
     buildFooterText({ categoryName: category.name, page: safePage, pages }),
   );
 

@@ -44,8 +44,7 @@ import {
   PterodactylService,
   setPterodactylForTests,
 } from '../src/services/pterodactyl.js';
-import { AppError, NotFoundError } from '../src/utils/errors.js';
-import { ValidationError } from '../src/utils/validation.js';
+import { AppError, NotFoundError, ValidationError } from '../src/utils/errors.js';
 
 const APP_KEY = 'ptla_testapplicationkey0000000000000000';
 const CLIENT_KEY = 'ptlc_testclientkey00000000000000000000';

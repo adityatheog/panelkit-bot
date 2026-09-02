@@ -323,6 +323,42 @@ function summarise(problems, limit = 8) {
   return `${problems.slice(0, limit).join('; ')} … and ${problems.length - limit} more`;
 }
 
+/**
+ * Removes comments from source before scanning it for import specifiers.
+ *
+ * Prose in a JSDoc block routinely contains phrases like
+ *
+ *   distinguishes "no panel account" from "could not check"
+ *
+ * and the specifier pattern in checkDependencies happily matches `from "could not check"`,
+ * reporting it as an undeclared dependency. Stripping comments removes the source of most
+ * such matches; the whitespace guard in checkDependencies catches the rest.
+ *
+ * Deliberately simple rather than a real parser. The guard on the line-comment pattern
+ * avoids eating the // in a URL such as https://panel.example.com inside a string.
+ *
+ * @param {string} source
+ * @returns {string}
+ */
+function stripComments(source) {
+  // Block comments first. The lazy quantifier stops at the first closing delimiter rather
+  // than running to the last one in the file.
+  const withoutBlocks = source.replace(/\/\*[\s\S]*?\*\//g, '');
+
+  /**
+   * Line comments, using a replacement FUNCTION rather than the string '$1'.
+   *
+   * This is the bug that corrupted this file. String.replace expands $1 inside a replacement
+   * STRING, so an injected helper containing '$1' had it substituted with the matched text —
+   * producing an unterminated string literal. A function receives the capture groups as
+   * arguments and performs no such expansion.
+   *
+   * The negated class before the double slash preserves the // in a URL such as
+   * https://panel.example.com when it appears inside a string.
+   */
+  return withoutBlocks.replace(/(^|[^:\\])\/\/.*$/gm, (match, prefix) => prefix);
+}
+
 // ============================================================================
 // Checks
 // ============================================================================
@@ -429,12 +465,18 @@ async function checkDependencies() {
   const imported = new Set();
 
   for (const file of files) {
-    const source = fs.readFileSync(file, 'utf8');
+    // Comments are stripped so prose such as `from "could not check"` is not read as a
+    // package specifier. See stripComments for why that phrasing is common here.
+    const source = stripComments(fs.readFileSync(file, 'utf8'));
 
     // Bare specifiers only: anything not starting with '.' or '/'.
     for (const match of source.matchAll(/(?:from|import)\s+['"]([^'".\/][^'"]*)['"]/g)) {
       const specifier = match[1];
       if (specifier.startsWith('node:')) continue;
+
+      // A package name never contains whitespace. This is the definitive guard against a
+      // prose match that survived comment stripping — a phrase inside a test name, say.
+      if (/\s/.test(specifier)) continue;
 
       // Strip a subpath, so "discord.js/foo" is checked as "discord.js".
       imported.add(
@@ -723,7 +765,15 @@ async function checkEnvValidation() {
     }
     record('Missing environment variables are rejected', rejected ? 'pass' : 'fail');
 
-    const token = 'MTExMTExMTExMTExMTExMTEx.GaBcDe.fGhIjKlMnOpQrStUvWxYz1234567890';
+    /**
+     * Deliberately NOT shaped like a real Discord token.
+     *
+     * validateTokenShape only checks for a "Bot " prefix, surrounding quotes and the presence
+     * of a dot, so this satisfies it. Keeping it short means it does not match the credential
+     * patterns THIS SCRIPT scans for — a realistic placeholder makes the audit fail on itself,
+     * and also trips the CI secrets job, which excludes tests/ but not scripts/.
+     */
+    const token = 'PLACEHOLDER.FOR.AUDIT';
     const appKey = 'ptla_auditplaceholder0000000000000000';
     const clientKey = 'ptlc_auditplaceholder0000000000000000';
 
@@ -1042,7 +1092,16 @@ async function checkHelpLayout() {
  * @returns {Promise<void>}
  */
 async function checkPlaceholders() {
-  const files = [...(await collect(path.join(ROOT, 'src'))), ...(await collect(path.join(ROOT, 'scripts')))];
+  /**
+   * This script is excluded from its own scan. PLACEHOLDER_PATTERNS necessarily contains
+   * every phrase it searches for, as regex literals, so scanning itself always matches.
+   */
+  const self = path.join('scripts', 'verify-project.js');
+
+  const files = [
+    ...(await collect(path.join(ROOT, 'src'))),
+    ...(await collect(path.join(ROOT, 'scripts'))),
+  ].filter((file) => path.relative(ROOT, file) !== self);
 
   /** @type {string[]} */
   const offenders = [];

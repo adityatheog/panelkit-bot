@@ -46,12 +46,14 @@ import {
 import { ConfigError } from '../src/utils/errors.js';
 
 /**
- * A bot token shaped like the real thing: three dot-separated base64url segments.
+ * Deliberately NOT shaped like a real Discord token.
  *
- * Not a real token, and deliberately not one that could be mistaken for one — the shape is what the
- * validator inspects.
+ * validateTokenShape only checks for a "Bot " prefix, surrounding quotes and the presence of a
+ * dot, so this satisfies it. Keeping it short means it does not match the credential patterns
+ * that scripts/verify-project.js and the CI secret scanner search for — a realistic token
+ * shape makes both report a committed credential.
  */
-const TOKEN = 'MTExMTExMTExMTExMTExMTEx.GaBcDe.fGhIjKlMnOpQrStUvWxYz1234567890';
+const TOKEN = 'PLACEHOLDER.FOR.TESTS';
 
 const CLIENT_ID = '111111111111111111';
 const GUILD_ID = '222222222222222222';
@@ -404,13 +406,19 @@ describe('the command prefix', () => {
      * The message router compares a fixed-length slice of the message content. A prefix with a space
      * would match unpredictably against ordinary sentences.
      */
-    for (const prefix of ['kx !', ' kx!', 'kx! ']) {
+    // Internal whitespace only. A prefix with a space inside it would match unpredictably
+    // against ordinary sentences in the message router.
+    for (const prefix of ['kx !', 'k x', 'a b c']) {
       assert.throws(
         () => loadEnv(baseEnv({ DEFAULT_PREFIX: prefix })),
         (err) => err instanceof ConfigError && /whitespace/i.test(err.message),
         `should reject ${JSON.stringify(prefix)}`,
       );
     }
+
+    // Leading and trailing whitespace is trimmed rather than refused: copy-pasting from a
+    // browser routinely picks up a trailing space.
+    assert.equal(loadEnv(baseEnv({ DEFAULT_PREFIX: ' kx! ' })).prefix, 'kx!');
   });
 
   test('notes a purely alphanumeric prefix', () => {
@@ -860,13 +868,19 @@ describe('describeEnv', () => {
 
   test('reports admin allowlists as counts rather than ids', () => {
     // The count answers "is this configured"; the ids would identify individuals in a log.
+    /**
+     * Admin ids distinct from CLIENT_ID, which describeEnv reports deliberately. Reusing the
+     * CLIENT_ID value here would make the assertion match that field rather than an
+     * allowlist entry, so the test would pass or fail for the wrong reason.
+     */
     const described = describeEnv(
-      loadEnv(baseEnv({ ADMIN_USER_IDS: '111111111111111111,222222222222222222', ADMIN_ROLE_IDS: '333333333333333333' })),
+      loadEnv(baseEnv({ ADMIN_USER_IDS: '444444444444444444,555555555555555555', ADMIN_ROLE_IDS: '666666666666666666' })),
     );
 
     assert.equal(described.adminUsers, 2);
     assert.equal(described.adminRoles, 1);
-    assert.ok(!JSON.stringify(described).includes('111111111111111111'));
+    assert.ok(!JSON.stringify(described).includes('444444444444444444'));
+    assert.ok(!JSON.stringify(described).includes('666666666666666666'));
   });
 });
 

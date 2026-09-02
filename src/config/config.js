@@ -342,7 +342,15 @@ function validateCooldowns(raw) {
   const perCommand = {};
 
   for (const [name, seconds] of Object.entries(perCommandRaw)) {
-    const value = Number(seconds);
+    /**
+     * Only a number is a cooldown.
+     *
+     * Number(null) is 0 and Number(true) is 1, both integers within bounds — so a null value
+     * would silently become a cooldown of zero, leaving the command it was meant to throttle
+     * unthrottled with no error and no warning.
+     */
+    const value = typeof seconds === 'number' ? seconds : Number.NaN;
+
     if (!Number.isInteger(value) || value < BOUNDS.cooldownSeconds.min || value > BOUNDS.cooldownSeconds.max) {
       throw new ConfigError(
         `config.json: cooldowns.perCommand["${name}"] must be an integer between ${BOUNDS.cooldownSeconds.min} and ${BOUNDS.cooldownSeconds.max}.`,

@@ -406,7 +406,17 @@ describe('assertSessionOwner and isSessionOwner', () => {
 
   test('compares as strings', () => {
     // A numeric id passed by a caller must still match, and must not be coerced loosely.
-    assert.equal(isSessionOwner({ ownerId: '123456789012345678' }, 123456789012345678n), false);
+    // String(bigint) is exact, so a BigInt id matches its string form.
+    assert.equal(isSessionOwner({ ownerId: '123456789012345678' }, 123456789012345678n), true);
+
+    /**
+     * The real hazard. A Number above 2^53 loses precision, so String(123456789012345678) is
+     * '123456789012345680' — a different id. Comparing as strings means the mismatch is
+     * caught rather than silently conflating two users.
+     */
+    assert.equal(isSessionOwner({ ownerId: '123456789012345678' }, 123456789012345678), false);
+
+    // A small id round-trips through Number without loss.
     assert.equal(isSessionOwner({ ownerId: '123' }, 123), true);
   });
 });

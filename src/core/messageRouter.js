@@ -115,7 +115,9 @@ export function createMessageRouter({ registry, env, config, services, cooldowns
 
       const tokens = withoutPrefix.split(/\s+/).slice(0, MAX_TOKENS);
 
-      const resolved = registry.resolvePrefix(tokens.slice(0, MAX_COMMAND_WORDS + MAX_TOKENS));
+      // tokens is already capped at MAX_TOKENS above, and resolvePrefix examines at most
+      // MAX_COMMAND_WORDS of them.
+      const resolved = registry.resolvePrefix(tokens);
       if (!resolved) {
         // Deliberately silent. See the header note on near-misses.
         logger.debug('Prefix message did not match a command', {

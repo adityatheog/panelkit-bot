@@ -1018,7 +1018,10 @@ describe('provision: the two policy bypasses', () => {
 
     try {
       seedUser(db, { discordId: TARGET, panelId: 7 });
-      seedServer(db, TARGET, { identifier: 'aaaaaaaa', panelServerId: 501 });
+      // 401 rather than 501: the shared panel double generates 501 for its first created
+      // server, and panel_server_id is UNIQUE — so seeding 501 makes the insert conflict
+      // rather than exercising the limit bypass.
+      seedServer(db, TARGET, { identifier: 'aaaaaaaa', panelServerId: 401 });
 
       assert.equal(db.countUserServers(TARGET), 1, 'already at the limit of one');
 

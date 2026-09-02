@@ -149,7 +149,7 @@ export class AccountService {
         throw new ValidationError(
           source === 'admin'
             ? 'That user already has a panel account.'
-            : 'You already have a panel account. Use `account info` to see it, or `account reset` for a new password.',
+            : `You already have a panel account. Use \`${this.env.prefix}account info\` to see it, or \`${this.env.prefix}account reset\` for a new password.`,
         );
       }
 

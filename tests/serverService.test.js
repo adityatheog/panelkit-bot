@@ -907,7 +907,7 @@ describe('createServer: concurrency and the limit', () => {
 
   test('different users are not serialised against each other', async () => {
     // One person's provisioning must not block another's.
-    const { service, db } = setup();
+    const { service, panel, db } = setup();
 
     try {
       const results = await Promise.allSettled([
@@ -915,9 +915,12 @@ describe('createServer: concurrency and the limit', () => {
         service.createServer({ discordId: STRANGER, eggKey: 'nodejs', name: 'Theirs' }),
       ]);
 
+      assert.equal(
+        panel.names().filter((name) => name === 'createServer').length,
+        2,
+        'both users should have reached the panel',
+      );
       assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
-      // The second fails only on the unique identifier from the shared double, not on the lock.
-      assert.ok(panel.names === undefined || true);
     } finally {
       db.close();
     }
@@ -1527,7 +1530,9 @@ describe('changeImage', () => {
     const { service, panel, db } = setup({ seedServer: true });
 
     try {
-      for (const image of ['ghcr.io/attacker/backdoor:1', 'node:latest', '', 'ghcr.io/example/node:22 ']) {
+      // No trailing-whitespace case: the value is trimmed and then matched against the
+      // allowlist, so it resolves to an image that IS allowed. Nothing unauthorised passes.
+      for (const image of ['ghcr.io/attacker/backdoor:1', 'node:latest', '', 'ghcr.io/example/node:21']) {
         await assert.rejects(
           () => service.changeImage({ discordId: OWNER, identifier: 'a1b2c3d4', image }),
           ValidationError,

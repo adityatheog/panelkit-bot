@@ -33,10 +33,27 @@ const UNKNOWN = 'Unknown';
  * @returns {number|null}
  */
 function toFiniteNumber(raw) {
-  if (raw === null || raw === undefined) return null;
-  if (typeof raw === 'string' && raw.trim() === '') return null;
-  const value = Number(raw);
-  return Number.isFinite(value) ? value : null;
+  // A number is a measurement.
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null;
+
+  // A numeric string is one too: JSON payloads sometimes carry them.
+  if (typeof raw === 'string') {
+    const text = raw.trim();
+    if (text === '') return null;
+
+    const value = Number(text);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  /**
+   * Everything else is an absence, not a zero.
+   *
+   * Number([]) is 0 and Number(true) is 1, so a permissive implementation renders an empty
+   * array as "0 B" — a factual claim about a value that was never a measurement. The panel
+   * omits resource fields for a server that has never booted, and the difference between
+   * "idle" and "not reported" is exactly what a user comparing two servers needs.
+   */
+  return null;
 }
 
 /**

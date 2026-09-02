@@ -1,0 +1,333 @@
+# Coded by Aditya | GitHub- @adityatheog
+
+# =============================================================================
+# PanelKit — continuous integration
+#
+# Runs the project's own verification pipeline on every push and pull request.
+# The important property: no credentials are needed. Every check is either static
+# or runs against an in-memory database and recording doubles, so a fork's pull
+# request gets the same signal as a push to main without any secret being exposed
+# to untrusted code.
+#
+# Three jobs, deliberately separate rather than combined:
+#
+#   verify   Syntax, project audit and the test suite, across two Node versions.
+#            The matrix exists because better-sqlite3 compiles a native addon per
+#            Node ABI, and Node 22 is where the next LTS line lands.
+#
+#   docker   Builds the production image. A native addon that compiles on the
+#            runner's Ubuntu can still fail on Debian slim, and a broken image is
+#            only discovered at deploy time otherwise.
+#
+#   secrets  Scans the diff for committed credentials. Cheap, and the one failure
+#            mode that cannot be undone by a later commit — git history keeps it.
+#
+# The verify job is what `npm run verify` runs locally, so a contributor sees the
+# same failures before pushing.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  # Manual runs, for re-checking after an upstream dependency advisory.
+  workflow_dispatch:
+
+# Read-only by default. Nothing here publishes, comments or writes back to the
+# repository, so the token needs nothing more — and a compromised action cannot
+# push with it.
+permissions:
+  contents: read
+
+# A new push to the same branch cancels the previous run. Without this, a rapid
+# series of commits queues several full matrix runs and the useful result arrives
+# last.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Suppresses npm's update notifier, which writes to a cache directory and
+  # produces noise in the log.
+  NO_UPDATE_NOTIFIER: 'true'
+  NPM_CONFIG_UPDATE_NOTIFIER: 'false'
+  # CI already implies non-interactive, but being explicit avoids a prompt if a
+  # dependency's install script asks something.
+  CI: 'true'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Syntax, audit and tests
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Verify (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Both versions run to completion even when one fails. Knowing whether a
+      # failure is version-specific is the point of the matrix.
+      fail-fast: false
+      matrix:
+        node:
+          # The minimum the project supports. package.json requires >=20.11.0
+          # because src/index.js uses import.meta.dirname.
+          - '20'
+          # The next LTS line. better-sqlite3 compiles per Node ABI, so a version
+          # bump can fail at install time rather than at runtime.
+          - '22'
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          # Caches ~/.npm keyed on the lockfile. Halves install time on a repeat
+          # run, which matters because the native addon compile is the slow part.
+          cache: npm
+
+      - name: Install the build toolchain
+        # better-sqlite3 has no prebuilt binary for every Node version, so
+        # node-gyp compiles it. python3, make and g++ are its requirements.
+        # ubuntu-latest ships python3 and make; g++ is present but pinned here so
+        # a runner image change cannot silently remove it.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes python3 make g++
+
+      - name: Install dependencies
+        # npm ci is reproducible and respects the lockfile exactly. The fallback
+        # covers a fresh clone that has not committed one yet; it prints a warning
+        # rather than failing, because the project must remain installable.
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            echo "::warning::No package-lock.json found. Falling back to npm install; builds are not reproducible without a lockfile."
+            npm install
+          fi
+
+      - name: Check syntax and imports
+        # Parses every source file and imports every module, so an unresolved
+        # import or a renamed export fails here rather than at startup. Entry
+        # points are parsed but not executed.
+        run: npm run syntax
+
+      - name: Audit the project
+        # Structural completeness: every expected file present, the command tree
+        # exactly 24 commands in 5 categories, both surfaces wired, config.json
+        # valid, the database schema applying, no placeholder markers.
+        #
+        # Needs no credentials: it validates literals and an in-memory database.
+        run: npm run audit
+
+      - name: Run the test suite
+        # node:test, no framework. 19 files covering validation, security,
+        # persistence, the command registry, help rendering, both routers and
+        # every service.
+        run: npm test
+
+      - name: Verify the database initialises from nothing
+        # The audit exercises an in-memory database; this exercises the real path
+        # on disk, including directory creation and the migration runner. A
+        # permissions or path bug would otherwise first appear on a fresh deploy.
+        run: |
+          node scripts/init-db.js --path ./ci-check.sqlite
+          node scripts/init-db.js --check --path ./ci-check.sqlite
+          rm -f ./ci-check.sqlite ./ci-check.sqlite-wal ./ci-check.sqlite-shm
+
+      - name: Verify the health check reports a missing heartbeat
+        # The probe must exit non-zero when the bot is not running. A regression
+        # here would make an orchestrator consider a dead container healthy, which
+        # is the failure mode that does the most damage in production.
+        run: |
+          if node scripts/healthcheck.js --path ./no-such-heartbeat; then
+            echo "::error::The health check reported healthy with no heartbeat file present."
+            exit 1
+          fi
+          echo "The health check correctly reported unhealthy."
+
+      - name: Verify the slash command payload builds
+        # A dry run, so nothing contacts Discord. Catches a structural conflict in
+        # the command tree — a name that is both a command and a parent, a
+        # duplicate subcommand — which would otherwise fail at deploy time with an
+        # error naming only an array index.
+        #
+        # Placeholder credentials satisfy loadEnv's shape validation without being
+        # usable for anything.
+        env:
+          DISCORD_TOKEN: 'testkeyof_discofd_test'
+          CLIENT_ID: '111111111111111111'
+          PANEL_URL: 'https://panel.example.invalid'
+          PANEL_APP_KEY: 'ptla_cibuildplaceholderkey000000000000000'
+          PANEL_CLIENT_KEY: 'ptlc_cibuildplaceholderkey000000000000000'
+        run: node src/deploy-commands.js --dry-run
+
+  # ---------------------------------------------------------------------------
+  # Container image
+  # ---------------------------------------------------------------------------
+  docker:
+    name: Build the container image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # Never pushed from CI. Publishing would need registry credentials, and
+          # this job exists to prove the image builds rather than to release it.
+          push: false
+          tags: panelkit-bot:ci
+          # Reuses layers across runs, which matters because the native addon
+          # compile dominates the build time.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify the image starts and refuses an empty environment
+        # The image must fail fast and legibly with no configuration, rather than
+        # starting half-configured. This asserts both the non-zero exit and that
+        # the message names what is missing — the only thing an operator sees
+        # before the process exits.
+        run: |
+          set +e
+          output="$(docker run --rm panelkit-bot:ci 2>&1)"
+          status=$?
+          set -e
+
+          echo "$output"
+
+          if [ "$status" -eq 0 ]; then
+            echo "::error::The bot exited successfully with no configuration; it should have failed."
+            exit 1
+          fi
+
+          if ! echo "$output" | grep -q 'DISCORD_TOKEN'; then
+            echo "::error::The startup error did not name the missing variables."
+            exit 1
+          fi
+
+          echo "The image correctly refused to start without configuration."
+
+      - name: Verify the health check runs inside the image
+        # Confirms scripts/healthcheck.js is present and executable in the
+        # runtime stage — the Dockerfile's HEALTHCHECK depends on it, and a
+        # missing file would make every container report unhealthy.
+        run: |
+          set +e
+          docker run --rm --entrypoint node panelkit-bot:ci scripts/healthcheck.js
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "::error::The health check reported healthy in a container with no running bot."
+            exit 1
+          fi
+
+          echo "The health check is present and correctly reports unhealthy."
+
+  # ---------------------------------------------------------------------------
+  # Committed secrets
+  # ---------------------------------------------------------------------------
+  secrets:
+    name: Scan for committed secrets
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          # The full history. A credential committed and later removed still
+          # exists in the object store, so scanning only the tip would miss the
+          # one case that cannot be fixed by a follow-up commit.
+          fetch-depth: 0
+
+      - name: Scan the tree for credential shapes
+        # Deliberately narrow patterns. A broad "long random string" rule fires on
+        # every hash and lockfile integrity field, and a scanner that cries wolf
+        # gets ignored — which is worse than no scanner.
+        #
+        # The audit script performs the same scan on source and config; this
+        # covers every tracked file, including documentation and workflows.
+        run: |
+          set -euo pipefail
+
+          patterns=(
+            'ptla_[A-Za-z0-9]\{40,\}'
+            'ptlc_[A-Za-z0-9]\{40,\}'
+            '[A-Za-z0-9_-]\{24,28\}\.[A-Za-z0-9_-]\{6\}\.[A-Za-z0-9_-]\{27,\}'
+          )
+
+          # Placeholders used in tests, CI and documentation are excluded by name
+          # rather than by pattern, so a real key that happens to resemble one is
+          # still caught.
+          found=0
+          for pattern in "${patterns[@]}"; do
+            if git grep -nIE "$pattern" -- \
+                 ':!tests/**' \
+                 ':!.github/workflows/**' \
+                 ':!*.md' \
+                 > /dev/null 2>&1; then
+              echo "::error::A value matching a credential pattern was found:"
+              git grep -nIE "$pattern" -- ':!tests/**' ':!.github/workflows/**' ':!*.md' || true
+              found=1
+            fi
+          done
+
+          if [ "$found" -eq 1 ]; then
+            echo "::error::Committed credentials must be revoked, not merely removed: git history retains them."
+            exit 1
+          fi
+
+          echo "No credential-shaped values found in tracked files."
+
+      - name: Verify .env is not tracked
+        # The single most consequential mistake available in this repository.
+        # git ls-files reports only tracked paths, so a local .env is ignored
+        # while a committed one fails the build.
+        run: |
+          set -euo pipefail
+
+          if git ls-files --error-unmatch .env > /dev/null 2>&1; then
+            echo "::error::.env is tracked by git. Remove it from the index, revoke every credential it contained, and confirm .gitignore covers it."
+            exit 1
+          fi
+
+          for tracked in $(git ls-files '.env.*'); do
+            if [ "$tracked" != ".env.example" ]; then
+              echo "::error::$tracked is tracked by git. Only .env.example may be committed."
+              exit 1
+            fi
+          done
+
+          echo ".env is not tracked. Only .env.example is committed."
+
+      - name: Verify .env.example carries no values
+        # The template documents every variable and must ship empty for the
+        # required ones. A filled-in value here is a credential published to
+        # everyone who clones the repository.
+        run: |
+          set -euo pipefail
+
+          required='DISCORD_TOKEN CLIENT_ID PANEL_URL PANEL_APP_KEY PANEL_CLIENT_KEY ADMIN_USER_IDS ADMIN_ROLE_IDS GUILD_ID'
+
+          for key in $required; do
+            value="$(grep -E "^${key}=" .env.example | head -n 1 | cut -d= -f2- || true)"
+            if [ -n "$value" ]; then
+              echo "::error::.env.example assigns a value to ${key}. Every credential placeholder must be empty."
+              exit 1
+            fi
+          done
+
+          echo ".env.example contains no credential values."

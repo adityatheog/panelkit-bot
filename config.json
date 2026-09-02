@@ -1,0 +1,132 @@
+{
+  "identity": {
+    "name": "PanelKit",
+    "shortName": "PanelKit",
+    "supportUrl": "",
+    "footerText": "PanelKit"
+  },
+  "colors": {
+    "primary": "#2B2D31",
+    "success": "#57F287",
+    "error": "#ED4245",
+    "warning": "#FEE75C"
+  },
+  "account": {
+    "emailDomain": "panelkit.local",
+    "usernameLength": 10,
+    "passwordLength": 16
+  },
+  "help": {
+    "pageSize": 8,
+    "descriptionMax": 51
+  },
+  "cooldowns": {
+    "defaultSeconds": 3,
+    "perCommand": {
+      "account create": 60,
+      "account delete": 30,
+      "account reset": 300,
+      "create": 15,
+      "files backup": 120,
+      "help": 2,
+      "server create": 30,
+      "server delete": 30,
+      "server logs": 15,
+      "server subuser add": 15,
+      "server subuser remove": 15
+    }
+  },
+  "deploy": {
+    "locationId": 0,
+    "dedicatedIp": false,
+    "portRange": []
+  },
+  "defaults": {
+    "limits": {
+      "memory": 1024,
+      "swap": 0,
+      "disk": 5120,
+      "io": 500,
+      "cpu": 100
+    },
+    "featureLimits": {
+      "databases": 1,
+      "allocations": 1,
+      "backups": 1
+    }
+  },
+  "subuser": {
+    "defaultPermissions": [
+      "control.console",
+      "control.start",
+      "control.stop",
+      "control.restart",
+      "file.read",
+      "file.read-content",
+      "file.create",
+      "file.update",
+      "file.delete",
+      "file.archive",
+      "file.sftp"
+    ]
+  },
+  "backups": {
+    "maxInlineBytes": 7340032
+  },
+  "logs": {
+    "maxUploadBytes": 7340032
+  },
+  "plans": [
+    {
+      "name": "Free",
+      "price": "Free",
+      "ram": 1024,
+      "disk": 5120,
+      "cpu": 100,
+      "servers": 1,
+      "description": "Community tier. Edit or extend this list in config.json."
+    }
+  ],
+  "eggs": {
+    "minecraft": {
+      "label": "Minecraft (Java)",
+      "eggId": 0,
+      "nestId": 0,
+      "dockerImage": "",
+      "startup": "",
+      "environment": {},
+      "logPaths": ["/logs/latest.log"],
+      "images": {}
+    },
+    "bun": {
+      "label": "Bun",
+      "eggId": 0,
+      "nestId": 0,
+      "dockerImage": "",
+      "startup": "",
+      "environment": {},
+      "logPaths": ["/logs/latest.log", "/output.log"],
+      "images": {}
+    },
+    "nodejs": {
+      "label": "Node.js",
+      "eggId": 0,
+      "nestId": 0,
+      "dockerImage": "",
+      "startup": "",
+      "environment": {},
+      "logPaths": ["/logs/latest.log", "/output.log"],
+      "images": {}
+    },
+    "python": {
+      "label": "Python",
+      "eggId": 0,
+      "nestId": 0,
+      "dockerImage": "",
+      "startup": "",
+      "environment": {},
+      "logPaths": ["/logs/latest.log", "/output.log"],
+      "images": {}
+    }
+  }
+}

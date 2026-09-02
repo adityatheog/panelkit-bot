@@ -1,0 +1,51 @@
+{
+  "name": "panelkit-bot",
+  "version": "1.0.0",
+  "description": "Production-ready Discord bot that integrates Discord.js v14 with a Pterodactyl Panel: account provisioning, server management, sub-users, backups, logs, resource monitoring and credits.",
+  "type": "module",
+  "license": "MIT",
+  "private": false,
+  "author": "Aditya (@adityatheog)",
+  "homepage": "https://github.com/adityatheog/panelkit-bot#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adityatheog/panelkit-bot.git"
+  },
+  "bugs": {
+    "url": "https://github.com/adityatheog/panelkit-bot/issues"
+  },
+  "keywords": [
+    "discord",
+    "discord-bot",
+    "discordjs",
+    "discordjs-v14",
+    "pterodactyl",
+    "pterodactyl-panel",
+    "game-hosting",
+    "server-management",
+    "sqlite"
+  ],
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20.11.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "deploy": "node src/deploy-commands.js",
+    "deploy:global": "node src/deploy-commands.js --global",
+    "deploy:clear": "node src/deploy-commands.js --clear",
+    "db:init": "node scripts/init-db.js",
+    "syntax": "node scripts/check.js",
+    "audit": "node scripts/verify-project.js",
+    "test": "node --test tests/",
+    "verify": "npm run syntax && npm run audit && npm test",
+    "health": "node scripts/healthcheck.js"
+  },
+  "dependencies": {
+    "axios": "1.7.7",
+    "better-sqlite3": "11.5.0",
+    "discord.js": "14.16.3",
+    "dotenv": "16.4.5"
+  }
+}

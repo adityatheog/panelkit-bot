@@ -1,0 +1,237 @@
+# Coded by Aditya | GitHub- @adityatheog
+
+# =============================================================================
+# PanelKit — systemd unit
+#
+# The third deployment option, and the right one when the bot runs on the same
+# host as the Pterodactyl panel: systemd is already managing the panel's own
+# services, the journal is already where the operator looks, and a container adds
+# a layer for no benefit.
+#
+# Install:
+#   sudo useradd --system --create-home --home-dir /opt/panelkit --shell /usr/sbin/nologin panelkit
+#   sudo git clone <repository> /opt/panelkit
+#   cd /opt/panelkit
+#   sudo -u panelkit npm ci --omit=dev
+#   sudo -u panelkit cp .env.example .env
+#   sudo -u panelkit $EDITOR .env             # fill in every REQUIRED value
+#   sudo -u panelkit $EDITOR config.json      # fill in the egg and location IDs
+#   sudo chmod 600 /opt/panelkit/.env
+#   sudo -u panelkit npm run deploy           # register slash commands, once
+#
+#   sudo cp deploy/panelkit.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now panelkit
+#
+# Operate:
+#   systemctl status panelkit
+#   journalctl -u panelkit -f
+#   journalctl -u panelkit -p warning --since '1 hour ago'
+#   sudo systemctl restart panelkit
+#
+# Update:
+#   cd /opt/panelkit && sudo -u panelkit git pull && sudo -u panelkit npm ci --omit=dev
+#   sudo -u panelkit npm run verify           # syntax, audit and tests
+#   sudo systemctl restart panelkit
+#
+# Adjust User, Group and the paths below if the installation directory differs.
+# Every ReadWritePaths entry must be updated to match.
+# =============================================================================
+
+[Unit]
+Description=PanelKit — Discord bot for Pterodactyl Panel
+Documentation=https://github.com/adityatheog/panelkit-bot
+
+# network-online.target rather than network.target. The latter is satisfied once
+# the network stack is configured, which is before routing is usable — so the bot
+# would start, fail to resolve Discord's gateway, and rely on a restart. Wants is
+# required alongside After, since After alone does not pull the target in.
+After=network-online.target
+Wants=network-online.target
+
+# If the panel runs on this host under systemd, uncommenting these makes the bot
+# start after it. Not enabled by default: the panel is usually a separate host,
+# and the bot starts correctly without it — panel commands report their own errors
+# until it becomes reachable.
+# After=pteroq.service
+# Wants=pteroq.service
+
+[Service]
+Type=simple
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+# A dedicated system account with no login shell. The bot needs no privileges
+# beyond writing its own data directory, and running it as root would give a
+# compromised dependency the whole host.
+User=panelkit
+Group=panelkit
+
+WorkingDirectory=/opt/panelkit
+
+# ---------------------------------------------------------------------------
+# Environment
+# ---------------------------------------------------------------------------
+# Credentials are read from this file by systemd and passed to the process, so
+# they never appear in the unit, in `systemctl show`, or in the process list.
+#
+# It must be readable by the service user and nobody else:
+#   sudo chown panelkit:panelkit /opt/panelkit/.env
+#   sudo chmod 600 /opt/panelkit/.env
+#
+# The application also loads .env through dotenv, so either mechanism works. Both
+# are harmless together: systemd sets them first, and dotenv does not override an
+# existing variable.
+EnvironmentFile=/opt/panelkit/.env
+
+Environment=NODE_ENV=production
+Environment=DATABASE_PATH=/opt/panelkit/data/panelkit.sqlite
+Environment=HEARTBEAT_PATH=/opt/panelkit/data/heartbeat
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+# An absolute path, because systemd does not search PATH for ExecStart. On a host
+# using nvm this will not be /usr/bin/node — check with `which node` as the
+# service user and adjust. Node 20.11 or newer is required.
+ExecStart=/usr/bin/node src/index.js
+
+# Node writes line-delimited JSON to stdout and stderr, with secrets redacted by
+# src/utils/logger.js. journald captures both.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=panelkit
+
+# ---------------------------------------------------------------------------
+# Restart policy
+# ---------------------------------------------------------------------------
+# on-failure rather than always. A clean exit means the shutdown handler ran and
+# called process.exit(0) — which only happens on an explicit signal — so
+# restarting would fight `systemctl stop`.
+Restart=on-failure
+RestartSec=5s
+
+# A configuration error exits non-zero immediately and will do so again on every
+# restart. Without a rate limit systemd would cycle as fast as Node can start,
+# filling the journal with the same message. Five failures in five minutes stops
+# the cycle and leaves the unit in `failed` state, which `systemctl status` shows
+# plainly — and which is the state an operator can actually notice.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# ---------------------------------------------------------------------------
+# Shutdown
+# ---------------------------------------------------------------------------
+# src/index.js handles SIGTERM: it stops the timers, closes the Discord gateway
+# connection, checkpoints the SQLite write-ahead log and removes the heartbeat
+# file.
+KillSignal=SIGTERM
+
+# Only the main process needs the signal; the bot spawns no children.
+KillMode=mixed
+
+# Raised from systemd's 90s default being unnecessary, and from the 10s that
+# containers often use being too tight. The WAL checkpoint is the slow step, and a
+# truncated checkpoint leaves recent commits in the -wal sidecar — still valid,
+# but missed by a backup that copies only the main database file.
+TimeoutStopSec=30s
+
+# ---------------------------------------------------------------------------
+# Hardening
+# ---------------------------------------------------------------------------
+# The bot makes outbound HTTPS requests, writes one directory, and needs nothing
+# else. Everything below removes access it does not use, so a compromised
+# dependency has very little to work with.
+
+# No setuid binary can grant this service more privilege than it starts with.
+NoNewPrivileges=true
+
+# A private /tmp and /var/tmp, discarded on stop.
+PrivateTmp=true
+
+# The entire filesystem is read-only except the paths named in ReadWritePaths.
+# This is the single most valuable line here: the bot cannot modify its own source,
+# so a dependency compromise cannot persist by rewriting src/.
+ProtectSystem=strict
+
+# No access to any home directory, including the service user's own.
+ProtectHome=true
+
+# The only writable paths. data/ holds the SQLite database and the heartbeat file;
+# logs/ is present for parity with the PM2 deployment and is unused under systemd
+# since journald captures the output.
+#
+# Update both if WorkingDirectory changes.
+ReadWritePaths=/opt/panelkit/data
+ReadWritePaths=/opt/panelkit/logs
+
+# The bot has no reason to read or write kernel state.
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+
+# Only the address families the bot uses: IPv4 and IPv6 for outbound HTTPS and
+# the Discord gateway, and AF_UNIX because Node's DNS resolver and journald both
+# rely on it.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# No new namespaces, no realtime scheduling, no changing the process personality.
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+# Drop every capability. A process binding no ports and touching no devices needs
+# none, and ambient must be cleared explicitly or a capability could still be
+# inherited.
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# Limit the syscall surface to what a network service actually issues.
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @obsolete @mount @debug @cpu-emulation @swap
+SystemCallErrorNumber=EPERM
+SystemCallArchitectures=native
+
+# Deliberately NOT set: MemoryDenyWriteExecute=true.
+#
+# V8 compiles JavaScript to machine code at runtime and requires writable-then-
+# executable pages to do it. Enabling this makes Node abort on startup with a
+# message about mprotect that gives no hint of the cause — a trap worth naming
+# rather than leaving for someone to rediscover.
+
+# Device access limited to the pseudo-devices Node needs: /dev/null, /dev/zero,
+# /dev/urandom and the tty. crypto.randomBytes, which generates every password and
+# session id in this project, reads from urandom.
+PrivateDevices=true
+
+# ---------------------------------------------------------------------------
+# Resource limits
+# ---------------------------------------------------------------------------
+# A safety net rather than an expectation. SQLite plus a gateway connection sits
+# well under 200 MB in normal operation; the headroom covers a large backup
+# archive being buffered before DM delivery.
+#
+# MemoryMax kills the process on breach and systemd restarts it, which loses open
+# interactive menus — acceptable, and preferable to the host's OOM killer choosing
+# what to terminate.
+MemoryHigh=384M
+MemoryMax=512M
+
+# Yield CPU to the panel and its game servers under contention. The bot is
+# latency-sensitive but not throughput-sensitive.
+CPUWeight=50
+IOWeight=50
+
+# Bounded well above what the bot uses — a gateway connection, a handful of
+# outbound HTTPS sockets and the SQLite file — so exhaustion indicates a leak.
+LimitNOFILE=4096
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

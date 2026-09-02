@@ -1,0 +1,157 @@
+# Coded by Aditya | GitHub- @adityatheog
+
+# =============================================================================
+# PanelKit — Docker Compose deployment
+#
+# The recommended way to run this bot in production. Compose is worth the file
+# because three things need to be right together and are easy to get wrong
+# individually: the credentials must come from the environment rather than the
+# image, the database must survive a container replacement, and config.json must
+# be editable without a rebuild.
+#
+# Start:
+#   cp .env.example .env      # then fill in every REQUIRED value
+#   $EDITOR config.json       # then fill in the egg and location IDs
+#   docker compose up -d
+#
+# Register slash commands (once, and after any command change):
+#   docker compose run --rm bot npm run deploy
+#
+# Inspect:
+#   docker compose logs -f bot
+#   docker compose ps                    # STATUS shows the health check result
+#   docker compose exec bot npm run health
+#
+# Update:
+#   git pull && docker compose up -d --build
+#
+# Back up the database while running:
+#   docker compose exec bot node scripts/init-db.js --backup /app/data/backup.sqlite
+#   docker compose cp bot:/app/data/backup.sqlite ./backup.sqlite
+#
+# Notes on what is deliberately absent:
+#
+#   No `ports:` section. The bot holds an outbound websocket to Discord and calls
+#   the panel's REST API; it listens on nothing. Publishing a port would advertise
+#   a surface that does not exist.
+#
+#   No `version:` key. It has been ignored by Compose v2 for years and emits a
+#   deprecation warning.
+#
+#   No secrets in this file. Everything sensitive lives in .env, which is
+#   git-ignored, so this file is safe to commit.
+# =============================================================================
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Named so `docker compose build --target build` can be used to inspect the
+      # compile stage when a native addon fails to build.
+      target: runtime
+
+    image: panelkit-bot:latest
+    container_name: panelkit-bot
+
+    # A single instance, deliberately. Interactive component sessions and the
+    # per-user locks live in process memory, so two replicas would each hold half
+    # the sessions and neither would serialise against the other. Horizontal
+    # scaling would require moving both to Redis; see the README.
+    #
+    # Compose has no `replicas` outside swarm mode, so this is a comment rather
+    # than a constraint — but it is the reason there is no scaling configuration.
+
+    restart: unless-stopped
+
+    # Credentials arrive at run time. Never baked into the image: a layer
+    # published to a registry is readable by everyone who can pull it.
+    env_file:
+      - .env
+
+    environment:
+      # Absolute paths inside the container, so the working directory cannot move
+      # where data lands. Both point at the volume mounted below.
+      NODE_ENV: production
+      DATABASE_PATH: /app/data/panelkit.sqlite
+      HEARTBEAT_PATH: /app/data/heartbeat
+
+    volumes:
+      # The SQLite database and the heartbeat file. A named volume rather than a
+      # bind mount, so the container's node user owns it without the operator
+      # having to match a uid on the host.
+      #
+      # Losing this volume disconnects every Discord user from the panel servers
+      # they own — the servers keep running, but the bot no longer knows who owns
+      # them. Back it up.
+      - panelkit-data:/app/data
+
+      # The egg catalogue, plans and cooldowns. Mounted read-only from the host so
+      # an operator can change egg IDs and restart, rather than rebuilding the
+      # image. Read-only because nothing in the bot writes it.
+      - ./config.json:/app/config.json:ro
+
+    # Reads the heartbeat file that the process rewrites every thirty seconds, so
+    # the check needs no listening port. Duplicated from the Dockerfile because a
+    # compose-level definition is what `docker compose ps` reports on, and having
+    # it here makes the interval visible to whoever is reading the deployment.
+    healthcheck:
+      test: ["CMD", "node", "scripts/healthcheck.js"]
+      interval: 60s
+      timeout: 10s
+      # Covers the startup sequence: environment validation, database migration
+      # and the optional panel credential check. The first heartbeat is written
+      # before the Discord login.
+      start_period: 40s
+      retries: 3
+
+    # Without a limit the JSON file driver grows until the disk fills, which on a
+    # long-running bot is a matter of weeks rather than months.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # The bot needs no elevated privileges: it makes outbound requests, writes one
+    # directory, and runs as the unprivileged node user from the image.
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    # Bounded so a runaway process cannot take the host with it. SQLite plus a
+    # discord.js gateway connection sits well under 200 MB in normal operation;
+    # 512 MB leaves room for a large backup being buffered before delivery.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+    # Long enough for the shutdown sequence to close the gateway connection and
+    # checkpoint the write-ahead log. The default of 10s is usually enough, but a
+    # checkpoint on a slow disk can exceed it, and a truncated WAL checkpoint
+    # leaves recent commits in a sidecar file that a volume snapshot would miss.
+    stop_grace_period: 30s
+
+    # A stopped bot has nothing to say to Discord, so there is no dependency on
+    # anything else here. If the panel runs in the same compose project, an
+    # operator may want to add:
+    #
+    #   depends_on:
+    #     panel:
+    #       condition: service_healthy
+    #
+    # It is omitted by default because the panel is normally a separate
+    # deployment, and the bot starts fine without it — panel commands report
+    # their own errors until it is reachable.
+
+volumes:
+  panelkit-data:
+    # Named explicitly rather than left to the project-prefixed default, so
+    # `docker volume ls` shows something recognisable and a later
+    # `docker compose down -v` is an obviously destructive act.
+    name: panelkit-data

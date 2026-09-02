@@ -1,0 +1,167 @@
+# Coded by Aditya | GitHub- @adityatheog
+
+# =============================================================================
+# Files excluded from the Docker build context.
+#
+# Two purposes, and the first is a security requirement rather than an
+# optimisation:
+#
+#   Secrets must never enter the build context. Anything sent to the daemon can
+#   end up in an image layer, and an image layer published to a registry is
+#   public to everyone who can pull it. A .env file copied into an image is a
+#   credential leak that survives every later deletion of the file, because
+#   layers are immutable.
+#
+#   The context should stay small. Everything listed here would otherwise be
+#   uploaded to the Docker daemon on every build — node_modules alone is tens of
+#   thousands of files, and the host's copy is compiled against the host's libc
+#   rather than the image's, so shipping it would be actively wrong.
+#
+# The Dockerfile also copies only four specific paths rather than using COPY . .
+# That is deliberate redundancy: if this file were misconfigured, an enumerated
+# copy still cannot pull in a local .env.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# Secrets — the reason this file exists
+# -----------------------------------------------------------------------------
+# Every variant, because .env.production and .env.local are just as sensitive.
+.env
+.env.*
+# The template carries no values and documents every variable, but it is not
+# needed at runtime either.
+.env.example
+
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+service-account*.json
+
+
+# -----------------------------------------------------------------------------
+# Dependencies
+# -----------------------------------------------------------------------------
+# Excluded for correctness, not just size. better-sqlite3 compiles a native addon
+# against the host's Node version and libc; copying the host's node_modules into a
+# Debian-based image produces an addon that fails at require time. The build stage
+# compiles its own.
+node_modules
+**/node_modules
+.npm
+.yarn
+.pnp
+.pnp.js
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+# -----------------------------------------------------------------------------
+# Runtime data
+# -----------------------------------------------------------------------------
+# The database holds real user records and the Discord-to-panel mapping. Baking a
+# development copy into an image would publish those records and give every
+# container the same stale starting state.
+data
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
+# The liveness file. A stale copy in the image would make the health check report
+# healthy for the first minute before the process had written anything.
+heartbeat
+
+logs
+*.log
+
+
+# -----------------------------------------------------------------------------
+# Version control and CI
+# -----------------------------------------------------------------------------
+# .git can be larger than the entire source tree, and its history may contain
+# credentials that were committed and later removed — history keeps them.
+.git
+.gitignore
+.gitattributes
+.github
+
+
+# -----------------------------------------------------------------------------
+# Tests and tooling
+# -----------------------------------------------------------------------------
+# The suite runs in CI and locally, never inside the production image. Excluding
+# it keeps the runtime image to the code that actually serves commands.
+tests
+coverage
+.nyc_output
+
+
+# -----------------------------------------------------------------------------
+# Documentation
+# -----------------------------------------------------------------------------
+# Useful in the repository, dead weight in a container.
+docs
+*.md
+LICENSE
+
+
+# -----------------------------------------------------------------------------
+# Container and deployment definitions
+# -----------------------------------------------------------------------------
+# The image does not need the files that describe how to build or deploy it, and
+# a compose override could reference host paths that do not exist inside it.
+Dockerfile
+Dockerfile.*
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
+deploy
+
+
+# -----------------------------------------------------------------------------
+# Build and packaging output
+# -----------------------------------------------------------------------------
+dist
+build
+out
+*.tgz
+*.zip
+*.tar.gz
+
+
+# -----------------------------------------------------------------------------
+# Editors and operating systems
+# -----------------------------------------------------------------------------
+.vscode
+.idea
+*.iml
+*.swp
+*.swo
+*~
+.eslintcache
+.editorconfig
+
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+
+# -----------------------------------------------------------------------------
+# Process managers and local overrides
+# -----------------------------------------------------------------------------
+.pm2
+ecosystem.config.cjs
+*.pid
+*.seed
+*.pid.lock
+config.local.json

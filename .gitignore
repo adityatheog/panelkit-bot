@@ -1,0 +1,99 @@
+# Coded by Aditya | GitHub- @adityatheog
+
+# -----------------------------------------------------------------------------
+# Secrets — never commit these
+# -----------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+secrets.json
+
+
+# -----------------------------------------------------------------------------
+# Dependencies
+# -----------------------------------------------------------------------------
+node_modules/
+jspm_packages/
+.npm/
+.yarn/
+.pnp
+.pnp.js
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+
+# -----------------------------------------------------------------------------
+# Runtime data
+# -----------------------------------------------------------------------------
+# The SQLite database and its write-ahead log. Back these up separately;
+# they must never enter version control because they hold user records.
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Liveness file written by the bot every 30 seconds.
+heartbeat
+
+# Logs
+logs/
+*.log
+
+
+# -----------------------------------------------------------------------------
+# Build, packaging and test output
+# -----------------------------------------------------------------------------
+dist/
+build/
+out/
+coverage/
+.nyc_output/
+*.tgz
+*.zip
+*.tar.gz
+
+
+# -----------------------------------------------------------------------------
+# Editors and tooling
+# -----------------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.iml
+*.swp
+*.swo
+*~
+.eslintcache
+
+
+# -----------------------------------------------------------------------------
+# Operating system
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+
+# -----------------------------------------------------------------------------
+# Process managers and local overrides
+# -----------------------------------------------------------------------------
+.pm2/
+*.pid
+*.seed
+*.pid.lock
+config.local.json
+docker-compose.override.yml

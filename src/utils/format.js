@@ -318,3 +318,14 @@ export function formatAllocation(allocation) {
 }
 
 export { UNKNOWN };
+/**
+ * Re-exported from validation.js.
+ *
+ * sanitiseForDisplay neutralises markdown and mention syntax in text that came from
+ * the panel rather than through this bot's validators — a server renamed directly in
+ * the panel can contain anything. It lives in validation.js beside the strict
+ * validators, but every caller is a display path, so it is re-exported here to keep
+ * those imports in one place.
+ */
+export { sanitiseForDisplay } from './validation.js';
+

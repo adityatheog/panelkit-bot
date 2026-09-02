@@ -51,7 +51,7 @@ import { ConfigError } from '../src/utils/errors.js';
  * Not a real token, and deliberately not one that could be mistaken for one — the shape is what the
  * validator inspects.
  */
-const TOKEN = 'mock_test_token_keu';
+const TOKEN = 'MTExMTExMTExMTExMTExMTEx.GaBcDe.fGhIjKlMnOpQrStUvWxYz1234567890';
 
 const CLIENT_ID = '111111111111111111';
 const GUILD_ID = '222222222222222222';

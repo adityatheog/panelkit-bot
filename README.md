@@ -12,7 +12,7 @@ Users create panel accounts, provision servers, and control them with slash comm
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A520.11-5FA04E?logo=node.js&logoColor=white)](https://nodejs.org)
 [![discord.js](https://img.shields.io/badge/discord.js-14.16.3-5865F2?logo=discord&logoColor=white)](https://discord.js.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Commands](https://img.shields.io/badge/commands-24-informational)](#commands)
+[![Commands](https://img.shields.io/badge/commands-25-informational)](#commands)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen)](#dependencies)
 
 [Quick start](#quick-start) · [Commands](#commands) · [Configuration](#configuration) · [Deployment](#deployment) · [Troubleshooting](#troubleshooting) · [Security](SECURITY.md)
@@ -116,7 +116,7 @@ npm run verify && npm run deploy && npm start
 
 ## Commands
 
-**24 commands, 5 categories.** All work on both surfaces. `kx!help` opens the browser; `kx!help server power` jumps straight to one command.
+**25 commands, 5 categories.** All work on both surfaces. `kx!help` opens the browser; `kx!help server power` jumps straight to one command.
 
 <table>
 <tr><td valign="top" width="50%">
@@ -162,6 +162,7 @@ npm run verify && npm run deploy && npm start
 | Command | |
 | --- | --- |
 | `create` | Provision for another user |
+| `admin prune` | Prune stale local servers |
 | `admin servers` | List all panel servers |
 | `admin suspend` | Suspend a user's servers |
 | `admin unsuspend` | Restore them |
@@ -372,7 +373,7 @@ npm run deploy     # register slash commands
 | Script | What it catches |
 | --- | --- |
 | `npm run syntax` | Parses **and imports** every module, so a renamed export or a broken relative path fails here rather than at startup. |
-| `npm run audit` | Structural completeness: expected files, the command tree exactly 24 commands in 5 categories in order, both surfaces wired, config valid, schema applying, no placeholders, no committed secrets. |
+| `npm run audit` | Structural completeness: expected files, the command tree exactly 25 commands in 5 categories in order, both surfaces wired, config valid, schema applying, no placeholders, no committed secrets. |
 | `npm test` | 19 files, `node:test`, no framework. |
 
 Set `GUILD_ID` and `LOG_LEVEL=debug` while developing.
@@ -502,7 +503,7 @@ src/
 ├── deploy-commands.js        Slash command registration
 ├── commands/
 │   ├── registry.js           One declaration → both surfaces + help
-│   └── definitions/          24 commands, one file each
+│   └── definitions/          25 commands, one file each
 ├── config/                   env.js, config.js — validation
 ├── core/                     context, cooldowns, messageRouter, reply
 ├── database/db.js            The only SQL in the project

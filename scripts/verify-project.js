@@ -45,7 +45,7 @@ const ROOT = path.resolve(import.meta.dirname, '..');
  */
 const EXPECTED_TREE = Object.freeze({
   Account: ['account create', 'account delete', 'account info', 'account reset'],
-  Admin: ['create', 'admin servers', 'admin suspend', 'admin unsuspend', 'admin user'],
+  Admin: ['create', 'admin prune', 'admin servers', 'admin suspend', 'admin unsuspend', 'admin user'],
   Files: ['files backup'],
   General: ['ping', 'plans', 'help'],
   Server: [
@@ -63,7 +63,7 @@ const EXPECTED_TREE = Object.freeze({
   ],
 });
 
-const EXPECTED_COMMAND_COUNT = 24;
+const EXPECTED_COMMAND_COUNT = 25;
 const EXPECTED_CATEGORY_COUNT = 5;
 
 /** Files without which the project is incomplete. */

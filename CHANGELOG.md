@@ -23,13 +23,43 @@ Anything an operator can pull and restart without reading is a minor or patch re
 
 ## [Unreleased]
 
-Nothing yet.
+Changes below are unreleased and do not denote a new tagged release. Historical release details and dependency versions remain under their original release heading.
+
+### Added
+
+- `admin prune`: find and re-verify stale local server records before removing them. It removes only local tracking rows after confirmed panel absence, not live panel servers. Together with the existing commands, the registry now exposes 25 commands in 5 categories. Re-register slash commands with `npm run deploy` to make it available.
+- Command-level regression coverage for DM-only logs and repeated, expired or evicted destructive confirmations. The credentialless suite now contains 20 test files.
+
+### Changed
+
+- Updated exact dependency pins: `discord.js` 14.27.0, `better-sqlite3` 12.10.0 and `axios` 1.20.0. `dotenv` remains 16.4.5; install from the committed lockfile with `npm ci`.
+- CI verifies Node 20, 22 and 24. Node 20.11 remains the compatibility floor, but Node 20 is end-of-life; use maintained Node 22 or 24 in production.
+- Docker build and runtime stages use Node 22.23.3 Bookworm Slim and require the lockfile. `NODE_IMAGE` permits the same pinned official image from the ECR Public mirror when Docker Hub is rate-limited. Rebuild the image after updating; do not reuse native modules built for a different runtime.
+- README, contributor, security and conduct guidance aligned with current versions, tests, privacy boundaries and deployment behaviour. Source authorship comments are not required; MIT and Contributor Covenant attribution remain preserved.
+
+### Fixed
+
+- Independent callers now queue behind a lock rather than being mistaken for recursive acquisition. Re-entrancy is checked within the caller's async context, and released leases do not permanently block detached descendants.
+- Account deletion shares server-owner locks with provisioning and server deletion. It reports servers already removed when a later panel deletion fails, retaining local records for a retry rather than claiming a rollback.
+- Panel ownership reconciliation uses bounded pagination of `/servers` and local `attributes.user` filtering instead of unsupported `filter[owner_id]`. Invalid collections/page metadata and more than 100 pages fail explicitly.
+- Credit grants, spending and administrative adjustments reject fractional or unsafe integers rather than silently truncating them.
+- Help and structural assertions now match the 25-command registry.
+
+### Security
+
+- `server logs` revalidates ownership and probes DM delivery before fetching. Attachments are delivered only in DMs, never as a channel fallback. Ordinary API responses are capped at 8 MiB and log downloads at 32 MiB.
+- Account/server deletion confirmations are single-use. Account deletion also checks the panel account ID shown in the prompt, preventing an old confirmation from deleting a replacement account.
+- Dependency updates address the vulnerability findings from the baseline audit. Continue running `npm audit`; a clean scan is not a guarantee against future advisories.
+
+### Upgrade actions
+
+Back up SQLite using `node scripts/init-db.js --backup <path>`, stop the bot and update the checkout. Run `npm ci` and `npm run verify` for a host installation, or rebuild with `docker compose up -d --build`. Register the updated slash payload with `npm run deploy` (or `docker compose run --rm bot npm run deploy`), checking the guild/global scope, and restart only one bot instance. No new required environment variables, config schema or database migration were introduced by these changes. Open menus do not survive a restart.
 
 ---
 
 ## [1.0.0] — 2026-09-02
 
-First release. Complete and production-ready: 24 commands across 5 categories, both a prefix and a slash surface, 19 test files that run without credentials, and three supported deployment paths.
+First release: 24 commands across 5 categories, both a prefix and a slash surface, 19 test files that run without credentials, and three supported deployment paths. The counts and versions in this section describe the original release; see `Unreleased` for the current branch.
 
 ### Added
 

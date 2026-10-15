@@ -10,7 +10,7 @@ Users create panel accounts, provision servers, and control them with slash comm
 
 [![CI](https://github.com/adityatheog/panelkit-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/adityatheog/panelkit-bot/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A520.11-5FA04E?logo=node.js&logoColor=white)](https://nodejs.org)
-[![discord.js](https://img.shields.io/badge/discord.js-14.16.3-5865F2?logo=discord&logoColor=white)](https://discord.js.org)
+[![discord.js](https://img.shields.io/badge/discord.js-14.27.0-5865F2?logo=discord&logoColor=white)](https://discord.js.org)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Commands](https://img.shields.io/badge/commands-25-informational)](#commands)
 [![Dependencies](https://img.shields.io/badge/dependencies-4-brightgreen)](#dependencies)
@@ -103,11 +103,11 @@ npm run verify && npm run deploy && npm start
 
 | | |
 | --- | --- |
-| 🔐 **Account provisioning** | Random usernames, `crypto.randomBytes` passwords with rejection sampling, DM-only delivery. Nothing stored — `account reset` is the recovery path, and it probes DM deliverability *before* changing the password so a closed inbox can't lock anyone out. |
+| 🔐 **Account provisioning** | Random usernames, `crypto.randomBytes` passwords with rejection sampling, DM-only delivery. Generated passwords are not stored by the bot — `account reset` is the recovery path, and it probes DM deliverability *before* changing the password so a closed inbox can't lock anyone out. |
 | 🖥️ **Server lifecycle** | Create, delete, rename, reinstall, power, image switching. Egg variables are read from the panel and merged with your overrides, so a missing required value is a config error *before* provisioning rather than an opaque 422 after. |
 | 🎛️ **Interactive dashboard** | Live status with owner-bound component sessions that expire. Destructive actions confirm, and the confirmation is single-use. |
 | 👥 **Sub-users** | Share a server with a permission set you define. `settings.delete` is refused at config load, so a sub-user can never delete the owner's server. |
-| 📦 **Backups & logs** | Archives and log files delivered by DM — attached when small, signed link when not. Never in a channel, because server configs routinely hold database passwords. |
+| 📦 **Backups & logs** | DM-only delivery. Backups are attached when small or delivered as signed links; logs are attachments trimmed to the configured upload limit, with a 32 MiB download cap. Never in a channel, because server configs routinely hold database passwords. |
 | 📖 **Interactive help** | Paginated browser rendered from the command registry, so it can't drift from what the bot implements. |
 | ⚡ **Two surfaces, one codebase** | Every command works as `kx!server power a1b2c3d4 restart` **and** `/server power`. One declaration produces both. |
 | 🛡️ **Production hardened** | Per-user cooldowns, retry with jitter honouring `Retry-After`, graceful shutdown that checkpoints the WAL, JSON logging with secret redaction, file-based liveness probe, one-command audit. |
@@ -337,12 +337,14 @@ pm2 save && pm2 startup      # both, or it won't survive a reboot
 pm2 install pm2-logrotate    # PM2 doesn't rotate logs itself
 ```
 
-The config is `.cjs` because `package.json` declares `"type": "module"` and PM2 loads config with `require()`. Credentials are deliberately absent from it — `pm2 save` writes the environment to `~/.pm2/dump.pm2` in plaintext.
+The config is `.cjs` because `package.json` declares `"type": "module"` and PM2 loads config with `require()`. Credentials are deliberately absent from it — `pm2 save` writes the environment to `~/.pm2/dump.pm2` in plaintext. Run PM2 as an unprivileged user; the config does not drop privileges. Keep credentials in the permission-restricted `.env`, not in exported shell variables or PM2 settings.
 
 </details>
 
 <details>
 <summary><b>systemd</b> — hardened unit, journald logging</summary>
+
+Before enabling the unit, create the `panelkit` user and group, install the checkout and dependencies under `/opt/panelkit`, and ensure that user can read `.env` and write the `data` and `logs` directories. The unit expects Node at `/usr/bin/node`; adjust `ExecStart` if your maintained Node installation is elsewhere. `ProtectHome=true` means a Node binary inside a user's home directory (such as NVM's) is not accessible to the service.
 
 ```bash
 sudo cp deploy/panelkit.service /etc/systemd/system/
@@ -351,7 +353,7 @@ sudo systemctl enable --now panelkit
 journalctl -u panelkit -f
 ```
 
-`ProtectSystem=strict` with only the data directory writable, every capability dropped, restricted syscall filter. `MemoryDenyWriteExecute` is deliberately **not** set — V8 needs writable-then-executable pages, and enabling it makes Node abort with an unhelpful `mprotect` error.
+`ProtectSystem=strict` with only the data and logs directories writable, every capability dropped, restricted syscall filter. `MemoryDenyWriteExecute` is deliberately **not** set — V8 needs writable-then-executable pages, and enabling it makes Node abort with an unhelpful `mprotect` error.
 
 </details>
 
@@ -364,7 +366,15 @@ If Docker Hub rate-limits your build, the official Docker image mirror is an alt
 
 Account deletion serialises with server creation and deletion. Confirmations are single-use and tied to the panel account shown in the prompt. Panel operations are not a distributed transaction: if only some servers are removed, the account and local ownership records remain for a retry, but the removed servers cannot be restored. Only servers tracked by this bot are deleted automatically; unrelated panel servers must be reconciled by an administrator.
 
-Admin reconciliation pages through the supported Application server endpoint and compares each returned `user` owner ID locally. It does not use unsupported owner filters. More than 100 pages or malformed responses fail explicitly instead of producing a misleading partial list. Normal API response bodies are limited to 8 MiB.
+Admin reconciliation pages through the supported Application server endpoint and compares each returned `user` owner ID locally. It does not use unsupported owner filters. More than 100 pages, non-array server collections or invalid page numbers fail explicitly instead of producing a misleading partial list. Normal API response bodies are limited to 8 MiB.
+
+### Updating an installation
+
+Read the [unreleased changes and upgrade notes](CHANGELOG.md) before updating. Back up the database with `scripts/init-db.js --backup`, stop the bot, update your checkout and keep only one instance running when you restart.
+
+For Node, PM2 and systemd installations, run `npm ci` and `npm run verify` using the same Node runtime that will run the bot. For Docker Compose, rebuild with `docker compose up -d --build`; native dependencies must be rebuilt with the image, not copied from the host.
+
+If commands or their options changed, register slash commands again with `npm run deploy`, or `docker compose run --rm bot npm run deploy`. Confirm the selected guild/global scope before registering, then check the startup log and `npm run health` (inside the container for Docker).
 
 ---
 
@@ -380,11 +390,13 @@ npm run deploy     # register slash commands
 
 | Script | What it catches |
 | --- | --- |
-| `npm run syntax` | Parses **and imports** every module, so a renamed export or a broken relative path fails here rather than at startup. |
+| `npm run syntax` | Parses source/scripts and imports non-entry-point modules, catching renamed exports and broken relative paths without starting the bot. |
 | `npm run audit` | Structural completeness: expected files, the command tree exactly 25 commands in 5 categories in order, both surfaces wired, config valid, schema applying, no placeholders, no committed secrets. |
-| `npm test` | 19 files, `node:test`, no framework. |
+| `npm test` | 20 files, `node:test`, no framework or credentials. |
 
 Set `GUILD_ID` and `LOG_LEVEL=debug` while developing.
+
+`npm run audit` is the project's structural audit; `npm audit` is npm's separate dependency vulnerability check. There is no separate lint, type-check or bundle command; syntax/import validation is part of `npm run verify`.
 
 ### Registering slash commands
 
@@ -409,9 +421,9 @@ node scripts/init-db.js --check                # read-only report
 node scripts/init-db.js --backup ./backup.sqlite
 ```
 
-Two tables: `users` maps a Discord ID to a panel account, `servers` maps a Discord ID to a panel server. WAL journaling, foreign keys on, migrations keyed on SQLite's own `user_version` and applied in a transaction per version.
+Two tables: `users` maps a Discord ID to a panel account and stores email, username, credits and creation time; `servers` stores ownership and server metadata. Generated passwords and panel API keys are not stored in SQLite. Restrict database and backup access: account metadata is still personal data. WAL journaling, foreign keys on, migrations keyed on SQLite's own `user_version` and applied in a transaction per version.
 
-Every statement is prepared and parameterised, and **ownership is expressed in SQL** — `getOwnedServer` carries `WHERE identifier = ? AND discord_id = ?`, so a foreign caller matches zero rows regardless of calling code.
+Queries handling user data are prepared and parameterised, and **ownership is expressed in SQL** — `getOwnedServer` carries `WHERE identifier = ? AND discord_id = ?`, so a foreign caller matches zero rows at that gate.
 
 > [!IMPORTANT]
 > **Back this file up.** Losing it deletes nothing on the panel — servers keep running — but the bot no longer knows who owns them, and every user loses access through Discord. Use `--backup` rather than copying the file, which can capture a torn write-ahead log.
@@ -492,11 +504,11 @@ Organised by symptom, because that's what you have.
 
 Five decisions shape everything else.
 
-**One declaration, two surfaces.** A command declares a canonical name — `server subuser add` — and the registry produces the prefix invocation, the nested slash invocation and the help entry. Commands receive a surface-agnostic `ctx` and never touch a `Message` or an `Interaction`. Adding a command means adding one file.
+**One declaration, two surfaces.** A command declares a canonical name — `server subuser add` — and the registry produces the prefix invocation, the nested slash invocation and the help entry. Commands use a surface-agnostic `ctx` for acknowledgement and replies; interactive presentation may use Discord.js builders and collectors. A new definition also needs tests, updated structural assertions and slash registration.
 
 **Authorisation is one function.** Every user-triggered server operation resolves `Discord user → local row → panel resource` through `requireOwnedServer()`. A user-supplied identifier never reaches the panel until that returns a row, and missing and foreign servers produce an identical error so the ID space can't be probed.
 
-**All HTTP in one module.** `services/pterodactyl.js` owns every Pterodactyl contract. Two axios instances, never mixed. Callers get plain camelCase objects, so a panel schema change is a one-line edit.
+**All panel HTTP in one module.** `services/pterodactyl.js` owns the Pterodactyl contracts. Two axios instances, never mixed. Callers get plain camelCase objects, keeping API changes and wire-level tests at one boundary.
 
 **All SQL in one module.** `database/db.js` holds every statement, prepared and parameterised, with ownership scoped in the SQL itself.
 
@@ -521,7 +533,7 @@ src/
 └── utils/                    validation, security, sessions, locks,
                               logger, errors, embeds, format, permissions
 scripts/                      check, verify-project, init-db, healthcheck
-tests/                        19 files, no credentials needed
+tests/                        20 files, no credentials needed
 deploy/panelkit.service       systemd unit
 ```
 
@@ -539,7 +551,7 @@ Full detail in [SECURITY.md](SECURITY.md), including a threat model and an expli
 - **Secrets never reach a log** — redaction by key name *and* value shape, recursively. `describeEnv` reduces every credential to a boolean, and tests assert no 8-character fragment survives
 - **Credentials go to DMs only**, never a channel, never to administrators
 - **Input allowlisted on both surfaces**, because Discord's client-side constraints are a convenience rather than a boundary
-- **Failures are honest** — account deletion aborts with nothing changed if any server can't be removed, rather than reporting a success nobody will verify
+- **Failures are honest** — failed account deletion preserves local records and reports any panel servers already removed; it does not claim a rollback of those deletions
 
 Found something? **Don't open a public issue** — see [SECURITY.md](SECURITY.md).
 
@@ -555,7 +567,7 @@ Each is a deliberate trade, not an oversight.
 | **Single instance** | Sessions and locks are in process memory. Scaling means moving both to Redis. |
 | **Sessions don't survive restarts** | Open menus go inert — correct, since their collectors are gone too. |
 | **Credits stored, not spent** | The balance and an atomic `spendCredits` exist; no command consumes them. What credits *cost* is your policy decision. |
-| **Drift isn't auto-reconciled** | A server deleted in the panel leaves a local record. `admin user` surfaces it and `pruneStaleServers` fixes it, but nothing runs on a schedule. |
+| **Drift isn't auto-reconciled** | A server deleted in the panel leaves a local record. `admin user` surfaces it and `admin prune` rechecks panel absence before removing stale local records, but nothing runs on a schedule. |
 | **Backups are synchronous** | One compression operation, slow on large servers, no progress reporting. |
 | **Sub-users need a panel account** | Pterodactyl doesn't create one implicitly. |
 
@@ -567,9 +579,9 @@ Four, pinned exactly. `node:test` is the test runner and `node:crypto` generates
 
 | Package | Version | Why |
 | --- | --- | --- |
-| [`discord.js`](https://discord.js.org) | 14.16.3 | Discord API client |
-| [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) | 11.5.0 | Synchronous SQLite — makes read-modify-write within one function atomic |
-| [`axios`](https://axios-http.com) | 1.7.7 | The timeout and redirect controls this needs |
+| [`discord.js`](https://discord.js.org) | 14.27.0 | Discord API client |
+| [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3) | 12.10.0 | Synchronous SQLite — makes read-modify-write within one function atomic |
+| [`axios`](https://axios-http.com) | 1.20.0 | The timeout and redirect controls this needs |
 | [`dotenv`](https://github.com/motdotla/dotenv) | 16.4.5 | `.env` loading |
 
 ---

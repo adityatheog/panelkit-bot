@@ -1,36 +1,3 @@
-// Coded by Aditya | GitHub- @adityatheog
-
-/**
- * The command registry: one source of truth for the entire command tree.
- *
- * A command is declared exactly once, in a file under commands/definitions/, with a
- * canonical space-separated name. That single declaration produces all three
- * surfaces:
- *
- *   prefix invocation   kx!server subuser add a1b2c3d4 friend@example.com
- *   slash invocation    /server subuser add server:a1b2c3d4 email:friend@…
- *   help entry          • **server subuser add** — Add a sub-user to your server
- *
- * Nothing is registered twice, so the surfaces cannot drift apart. Adding a command
- * means adding one file; the routers, the deploy script and the help menu pick it up
- * without modification.
- *
- * Name mapping onto Discord's structure:
- *
- *   "ping"                     ->  /ping
- *   "account create"           ->  /account create              (subcommand)
- *   "server subuser add"       ->  /server subuser add          (group + subcommand)
- *
- * Discord permits at most command -> group -> subcommand, so a canonical name may
- * not exceed three words. That is enforced here rather than discovered as an opaque
- * 400 from the API during deployment.
- *
- * This module validates aggressively and at load time. Every constraint Discord
- * imposes — name patterns, description lengths, option counts, required-before-
- * optional ordering — is checked before a payload is built, because a rejected
- * bulk registration tells you only that *something* in the array was invalid.
- */
-
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -38,13 +5,6 @@ import { SlashCommandBuilder } from 'discord.js';
 import { ConfigError } from '../utils/errors.js';
 import { logger } from '../utils/logger.js';
 
-/**
- * Descriptions for slash parents and groups.
- *
- * Discord requires a description on every command and group, but a parent such as
- * `account` is not itself a command and has no definition file to take one from.
- * These fill that gap and appear in the Discord command picker.
- */
 const PARENT_DESCRIPTIONS = Object.freeze({
   account: 'Manage your panel account',
   admin: 'Administrative panel tools',
@@ -53,19 +13,14 @@ const PARENT_DESCRIPTIONS = Object.freeze({
   'server subuser': 'Manage sub-users on your server',
 });
 
-/** Canonical names: one to three lowercase, hyphen-friendly words. */
 const NAME_RE = /^[a-z0-9-]+( [a-z0-9-]+){0,2}$/;
 
-/** Discord's own pattern for a command, group or subcommand segment. */
 const SEGMENT_RE = /^[a-z0-9-]{1,32}$/;
 
-/** Discord's pattern for an option name. */
 const OPTION_NAME_RE = /^[a-z0-9_-]{1,32}$/;
 
-/** Option types this project supports. Each maps to a discord.js builder method. */
 const OPTION_TYPES = Object.freeze(['string', 'integer', 'user']);
 
-/** Discord limits, checked here so deployment cannot fail on them. */
 const DISCORD_LIMITS = Object.freeze({
   description: 100,
   optionsPerCommand: 25,
@@ -75,21 +30,10 @@ const DISCORD_LIMITS = Object.freeze({
   commandsGlobal: 100,
 });
 
-/** Sort weight for commands that do not declare `order`. */
 const DEFAULT_ORDER = 100;
 
-/**
- * Recursively collects .js files, sorted for deterministic load order.
- *
- * Determinism matters: the slash payload's element order affects nothing
- * functionally, but a stable order makes the deploy script's output diffable and
- * keeps test assertions meaningful.
- *
- * @param {string} dir
- * @returns {Promise<string[]>}
- */
 async function collectFiles(dir) {
-  /** @type {import('node:fs').Dirent[]} */
+
   let entries;
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
@@ -110,16 +54,6 @@ async function collectFiles(dir) {
   return files;
 }
 
-/**
- * Validates one option declaration.
- *
- * @param {unknown} option
- * @param {string} commandName
- * @param {number} index
- * @param {Set<string>} seenNames
- * @returns {void}
- * @throws {ConfigError}
- */
 function validateOption(option, commandName, index, seenNames) {
   const where = `option ${index} of "${commandName}"`;
 
@@ -196,14 +130,6 @@ function validateOption(option, commandName, index, seenNames) {
   }
 }
 
-/**
- * Validates one command definition.
- *
- * @param {unknown} command
- * @param {string} file relative path, for error messages
- * @returns {void}
- * @throws {ConfigError}
- */
 function validateDefinition(command, file) {
   if (!command || typeof command !== 'object' || Array.isArray(command)) {
     throw new ConfigError(`${file} does not export a command object as its default export.`);
@@ -269,8 +195,6 @@ function validateDefinition(command, file) {
   const seenNames = new Set();
   options.forEach((option, index) => validateOption(option, name, index, seenNames));
 
-  // A greedy option consumes the rest of the prefix input, so anything declared
-  // after it could never receive a value.
   const greedyIndex = options.findIndex((option) => option.greedy === true);
   if (greedyIndex !== -1 && greedyIndex !== options.length - 1) {
     throw new ConfigError(
@@ -278,8 +202,6 @@ function validateDefinition(command, file) {
     );
   }
 
-  // A required option after an optional one is unresolvable positionally on the
-  // prefix surface, and Discord rejects the same ordering outright.
   let seenOptional = false;
   for (const option of options) {
     if (option.required) {
@@ -294,13 +216,6 @@ function validateDefinition(command, file) {
   }
 }
 
-/**
- * Applies option declarations to a builder.
- *
- * @param {import('discord.js').SlashCommandBuilder | import('discord.js').SlashCommandSubcommandBuilder} builder
- * @param {Array<object>} options
- * @returns {typeof builder}
- */
 function applyOptions(builder, options = []) {
   for (const option of options) {
     const applyCommon = (builderOption) =>
@@ -346,22 +261,10 @@ function applyOptions(builder, options = []) {
   return builder;
 }
 
-/**
- * Restricts a root command to guilds.
- *
- * setContexts is the current API and setDMPermission the deprecated one. Both are
- * feature-detected so the project works across discord.js 14.x minor versions
- * without emitting deprecation warnings on either. Failure is non-fatal: the
- * routers enforce guildOnly at runtime regardless, so the worst case is that the
- * command appears in DMs and answers with the "Server Only" embed.
- *
- * @param {import('discord.js').SlashCommandBuilder} builder
- * @returns {import('discord.js').SlashCommandBuilder}
- */
 function restrictToGuild(builder) {
   try {
     if (typeof builder.setContexts === 'function') {
-      // InteractionContextType.Guild === 0
+
       builder.setContexts(0);
     } else if (typeof builder.setDMPermission === 'function') {
       builder.setDMPermission(false);
@@ -375,39 +278,14 @@ function restrictToGuild(builder) {
   return builder;
 }
 
-/**
- * @param {string} key
- * @returns {string}
- */
 function parentDescription(key) {
   return PARENT_DESCRIPTIONS[key] ?? `${key} commands`;
 }
 
-/**
- * Builds the Discord slash command payload from canonical names.
- *
- * Two passes. The first groups definitions by root and by group, because a
- * subcommand group cannot be emitted until every one of its leaves is known — a
- * single-pass build would have to mutate a group after adding it, which the builder
- * does not support. The second pass emits each root once, fully formed.
- *
- * @param {Array<object>} commands
- * @returns {Array<object>} JSON payloads ready for the REST API
- * @throws {ConfigError} on any structural conflict
- */
 export function buildSlashBody(commands) {
-  /**
-   * @type {Map<string, {
-   *   name: string,
-   *   standalone: object|null,
-   *   subcommands: Array<{ leaf: string, command: object }>,
-   *   groups: Map<string, Array<{ leaf: string, command: object }>>,
-   *   guildOnly: boolean
-   * }>}
-   */
+
   const roots = new Map();
 
-  // Pass one: group by structure.
   for (const command of commands) {
     if (command.slash === false) continue;
 
@@ -423,10 +301,8 @@ export function buildSlashBody(commands) {
         guildOnly: false,
       });
     }
-    const root = /** @type {NonNullable<ReturnType<typeof roots.get>>} */ (roots.get(rootName));
+    const root = roots.get(rootName);
 
-    // A root is guild-only if any command beneath it is. Discord scopes context at
-    // the root, so the stricter setting wins; the routers still gate per command.
     if (command.guildOnly !== false) root.guildOnly = true;
 
     if (parts.length === 1) {
@@ -461,7 +337,6 @@ export function buildSlashBody(commands) {
       continue;
     }
 
-    // Three segments: root -> group -> subcommand.
     if (root.subcommands.some((entry) => entry.leaf === parts[1])) {
       throw new ConfigError(
         `"${command.name}" needs "${parts[1]}" to be a subcommand group, but it is already a subcommand of "${rootName}".`,
@@ -469,14 +344,13 @@ export function buildSlashBody(commands) {
     }
     if (!root.groups.has(parts[1])) root.groups.set(parts[1], []);
 
-    const group = /** @type {Array<{ leaf: string, command: object }>} */ (root.groups.get(parts[1]));
+    const group = root.groups.get(parts[1]);
     if (group.some((entry) => entry.leaf === parts[2])) {
       throw new ConfigError(`Duplicate subcommand "${command.name}".`);
     }
     group.push({ leaf: parts[2], command });
   }
 
-  // Pass two: emit.
   const body = [];
 
   for (const root of roots.values()) {
@@ -538,22 +412,12 @@ export function buildSlashBody(commands) {
   return body;
 }
 
-/**
- * Enumerates every invocable slash path in a payload.
- *
- * Used by the audit script and the tests to prove that every command in the
- * registry is actually reachable as a slash command, by walking the real payload
- * rather than trusting the definitions.
- *
- * @param {Array<object>} body output of buildSlashBody
- * @returns {Set<string>} canonical names, for example "server subuser add"
- */
 export function slashLeaves(body) {
   const leaves = new Set();
 
   for (const command of body) {
     const options = Array.isArray(command.options) ? command.options : [];
-    // ApplicationCommandOptionType: 1 = Subcommand, 2 = SubcommandGroup
+
     const subcommands = options.filter((option) => option.type === 1);
     const groups = options.filter((option) => option.type === 2);
 
@@ -575,17 +439,6 @@ export function slashLeaves(body) {
   return leaves;
 }
 
-/**
- * Sorts commands by explicit order, then alphabetically.
- *
- * `order` exists because the documented layout is not purely alphabetical: the
- * Admin category leads with `create`, and General runs ping, plans, help. Commands
- * without an explicit order fall back to alphabetical within their category.
- *
- * @param {object} a
- * @param {object} b
- * @returns {number}
- */
 function byOrderThenName(a, b) {
   const orderA = Number.isInteger(Number(a.order)) ? Number(a.order) : DEFAULT_ORDER;
   const orderB = Number.isInteger(Number(b.order)) ? Number(b.order) : DEFAULT_ORDER;
@@ -593,18 +446,8 @@ function byOrderThenName(a, b) {
   return a.name.localeCompare(b.name);
 }
 
-/**
- * Builds the registry from a list of validated definitions.
- *
- * Exported separately from loadRegistry so tests can construct a registry from
- * literals without touching the filesystem.
- *
- * @param {Array<object>} commands
- * @returns {object} the registry
- * @throws {ConfigError} on duplicate names or alias collisions
- */
 export function createRegistry(commands) {
-  /** @type {Map<string, object>} Lookup by canonical name and by alias. */
+
   const byName = new Map();
 
   for (const command of commands) {
@@ -614,8 +457,6 @@ export function createRegistry(commands) {
     byName.set(command.name, command);
   }
 
-  // Aliases are registered after every canonical name, so an alias that shadows a
-  // real command is caught regardless of file load order.
   for (const command of commands) {
     for (const alias of command.aliases ?? []) {
       const key = String(alias).toLowerCase();
@@ -638,63 +479,30 @@ export function createRegistry(commands) {
   }));
 
   return {
-    /** Every visible command, globally sorted. */
+
     all: visible,
 
-    /** Every command including hidden ones, in load order. */
     every: commands,
 
-    /** Lookup map including aliases. Prefer get() and getVisible(). */
     byName,
 
-    /** Categories with their commands, both sorted. */
     categories,
 
-    /** Counts used by the help header. Hidden commands are excluded. */
     counts: Object.freeze({ commands: visible.length, categories: categoryNames.length }),
 
-    /**
-     * Resolves a command by canonical name or alias, including hidden ones.
-     *
-     * @param {unknown} name
-     * @returns {object|null}
-     */
     get(name) {
       return byName.get(String(name ?? '').trim().toLowerCase()) ?? null;
     },
 
-    /**
-     * Resolves a command only if it appears in help.
-     *
-     * Used by the help menu so a hidden command cannot be surfaced through a
-     * crafted select-menu value.
-     *
-     * @param {unknown} name
-     * @returns {object|null}
-     */
     getVisible(name) {
       const command = byName.get(String(name ?? '').trim().toLowerCase());
       return command && command.hidden !== true ? command : null;
     },
 
-    /**
-     * @param {unknown} name
-     * @returns {{ name: string, commands: object[] }|null}
-     */
     category(name) {
       return categories.find((entry) => entry.name === name) ?? null;
     },
 
-    /**
-     * Resolves a prefix invocation, longest match first.
-     *
-     * Three tokens are tried, then two, then one, so "server subuser add" wins over
-     * a hypothetical "server" command. Remaining tokens are returned as positional
-     * arguments.
-     *
-     * @param {string[]|string} tokens
-     * @returns {{ command: object, rest: string[] }|null}
-     */
     resolvePrefix(tokens) {
       const list = Array.isArray(tokens)
         ? tokens.map(String)
@@ -711,33 +519,16 @@ export function createRegistry(commands) {
       return null;
     },
 
-    /**
-     * Builds the Discord registration payload.
-     *
-     * @returns {Array<object>}
-     */
     slashBody() {
       return buildSlashBody(commands);
     },
 
-    /**
-     * Every canonical name reachable as a slash command.
-     *
-     * @returns {Set<string>}
-     */
     slashLeaves() {
       return slashLeaves(buildSlashBody(commands));
     },
   };
 }
 
-/**
- * Loads and validates every command definition from disk.
- *
- * @param {string} baseDir the src directory
- * @returns {Promise<ReturnType<typeof createRegistry>>}
- * @throws {ConfigError} when the directory is empty or a definition is invalid
- */
 export async function loadRegistry(baseDir) {
   const dir = path.join(baseDir, 'commands', 'definitions');
   const files = await collectFiles(dir);
@@ -757,8 +548,7 @@ export async function loadRegistry(baseDir) {
     try {
       module = await import(pathToFileURL(file).href);
     } catch (err) {
-      // An import failure here is almost always a typo in an import path inside the
-      // definition, so the underlying message is worth surfacing verbatim.
+
       throw new ConfigError(`Could not load the command definition ${relative}: ${err?.message ?? 'import failed'}`);
     }
 
@@ -769,8 +559,6 @@ export async function loadRegistry(baseDir) {
 
   const registry = createRegistry(commands);
 
-  // Building the payload now means a structural conflict is reported at startup
-  // rather than when someone runs the deploy script.
   const body = registry.slashBody();
 
   logger.info('Command registry loaded', {
@@ -784,17 +572,7 @@ export async function loadRegistry(baseDir) {
   return registry;
 }
 
-/**
- * Checks the registry against the documented command tree.
- *
- * Called by scripts/verify-project.js. Returns findings rather than throwing, so
- * the audit can report every discrepancy at once.
- *
- * @param {ReturnType<typeof createRegistry>} registry
- * @param {{ expectedCommands?: number, expectedCategories?: number }} [expectations]
- * @returns {{ ok: boolean, problems: string[] }}
- */
-export function auditRegistry(registry, { expectedCommands = 24, expectedCategories = 5 } = {}) {
+export function auditRegistry(registry, { expectedCommands = 25, expectedCategories = 5 } = {}) {
   const problems = [];
 
   if (registry.counts.commands !== expectedCommands) {

@@ -79,7 +79,7 @@ Each of these has tests asserting the negative case — that the attack fails �
 
 **Expiry is enforced on read.** Not only by the periodic sweeper — a component pressed between sweeps still resolves to nothing. A stale component receives the "Timed Out" reply rather than executing.
 
-**Confirmations are single-use.** Destructive flows delete the session *before* the work begins, not after, because deleting an account with several servers takes tens of seconds during which the button remains clickable. A second press falls through to the router and is refused.
+**Confirmations are single-use.** Account/server deletion must successfully claim a live session before any mutation; repeated, evicted or expired confirmations perform no work. Account prompts also bind the expected panel user ID so an old prompt cannot remove a replacement account.
 
 **The session store is bounded.** A cap with oldest-first eviction, so component spam cannot grow the map without limit. The worst outcome of eviction is one user's menu expiring early.
 
@@ -106,6 +106,8 @@ Each of these has tests asserting the negative case — that the attack fails �
 **Delivered by direct message only.** Passwords and signed download URLs never appear in a channel, never in a log, and never in an error. They are returned from the service exactly once and stored nowhere — which is why there is no password lookup for administrators, and why `admin user` says so explicitly.
 
 **Deliverability is probed before anything irreversible.** `account reset` sends a cheap message *before* changing the password, so a closed inbox produces a clean refusal with the existing password intact rather than locking the user out. `files backup` probes before compressing, so a closed inbox does not waste a minute of node time and leave an orphaned archive.
+
+**Logs are private too.** Ownership is checked before probing DMs; a closed inbox prevents fetching. Log attachments are never sent through channel responses, even when delivery subsequently fails. API bodies are capped at 8 MiB and log downloads at 32 MiB to bound untrusted responses.
 
 **Undelivered credentials are not shown as a fallback.** An ephemeral channel reply is not a secure channel — it is visible to anyone shoulder-surfing and persists in the client. When a DM fails, the user is told how to retry; the value is not offered another way.
 
@@ -151,7 +153,9 @@ Each of these has tests asserting the negative case — that the attack fails �
 
 **Check-then-act is serialised.** Node returns to the event loop at every `await`, so a limit check followed by a panel call is a race: two concurrent requests both read a count of zero, both pass, and the user ends up over `FREE_SERVER_LIMIT`. Provisioning, deletion, sub-user changes and backups run inside per-key locks. The test reproduces the race unlocked — asserting it *fails* — then locked.
 
-**Re-entrant acquisition is detected.** Recursive acquisition of the same key can never succeed and would hang forever with no error. It throws instead, naming the key.
+**Re-entrant acquisition is context-local.** AsyncLocalStorage distinguishes recursion from independent queued requests. Released leases are marked inactive so detached descendants do not inherit a permanent denial. Clearing active locks is refused.
+
+**Account lifecycle operations share server locks.** Account deletion acquires account then server-owner locks; provisioning and server deletion use the same owner key. Partial panel deletion is reported as partial progress, not as an atomic rollback. Credit adjustments accept only safe integers and reject balances beyond JavaScript's exact integer range.
 
 ### Destructive operations
 

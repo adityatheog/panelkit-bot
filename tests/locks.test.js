@@ -1,65 +1,15 @@
-// Coded by Aditya | GitHub- @adityatheog
-
-/**
- * Tests for src/utils/locks.js.
- *
- * The lock manager exists to close one concrete race, and that race is what these tests
- * reproduce directly rather than testing the primitive abstractly:
- *
- *   handler A: reads the server count -> 0, passes the limit check, awaits the panel
- *   handler B: reads the server count -> 0, passes the limit check, awaits the panel
- *   both succeed, and the user now owns two servers with FREE_SERVER_LIMIT=1
- *
- * Node's single thread does not prevent this. Every one of those handlers awaits a panel call,
- * and control returns to the event loop at exactly that point. A check-then-act sequence
- * spanning an await is only safe if it is serialised.
- *
- * Four properties are asserted throughout:
- *
- *   Mutual exclusion. Two callers on the same key never overlap, verified by tracking
- *   concurrency inside the critical section rather than by inspecting internal state.
- *
- *   Independence. Different keys never contend, so one user's provisioning does not block
- *   another's.
- *
- *   Exception safety. A thrown or rejected callback still releases the lock. A leaked lock is
- *   worse than no lock: it wedges a key permanently and the failure appears later, elsewhere.
- *
- *   No leaks. The internal map returns to empty, since a public bot would otherwise retain one
- *   entry per Discord user who ever ran a locked command.
- *
- * No credentials, no network, no filesystem.
- */
-
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
 import { createLockManager, DEFAULT_TIMEOUT_MS, locks, QUEUE_WARN_THRESHOLD } from '../src/utils/locks.js';
 import { AppError } from '../src/utils/errors.js';
 
-/**
- * Yields to the event loop.
- *
- * The await point every real handler has when it calls the panel, and the point at which an
- * unlocked check-then-act sequence interleaves.
- *
- * @param {number} [ms]
- * @returns {Promise<void>}
- */
 function tick(ms = 0) {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
 }
 
-/**
- * Tracks how many callers are inside a critical section at once.
- *
- * Asserting on observed concurrency is what makes these tests meaningful: it measures the
- * property the lock provides rather than the bookkeeping it uses to provide it.
- *
- * @returns {{ enter: () => void, exit: () => void, max: () => number, current: () => number }}
- */
 function concurrencyTracker() {
   let current = 0;
   let max = 0;
@@ -79,10 +29,7 @@ function concurrencyTracker() {
 
 describe('mutual exclusion', () => {
   test('serialises concurrent callers on the same key', async () => {
-    /**
-     * The core guarantee. Each callback yields inside its critical section, so without the lock
-     * both would be inside simultaneously and observed concurrency would reach two.
-     */
+
     const manager = createLockManager();
     const tracker = concurrencyTracker();
 
@@ -99,14 +46,9 @@ describe('mutual exclusion', () => {
   });
 
   test('reproduces the limit-check race the lock exists to prevent', async () => {
-    /**
-     * Without serialisation both callers read a count of zero, both pass the check, and both
-     * write — which is precisely how a user ends up over FREE_SERVER_LIMIT. Run once unlocked to
-     * demonstrate the failure, then once locked to show it is closed.
-     */
+
     const limit = 1;
 
-    /** @returns {Promise<number>} how many writes got through */
     async function attempt(useLock) {
       const manager = createLockManager();
       let stored = 0;
@@ -114,7 +56,7 @@ describe('mutual exclusion', () => {
       const provision = async () => {
         const body = async () => {
           const owned = stored;
-          // The await a real handler has when it calls the panel.
+
           await tick(5);
           if (owned >= limit) return false;
           stored += 1;
@@ -136,7 +78,7 @@ describe('mutual exclusion', () => {
   });
 
   test('runs waiters in arrival order', async () => {
-    // FIFO per key, so a queued request is not starved by later arrivals.
+
     const manager = createLockManager();
     const order = [];
 
@@ -165,7 +107,7 @@ describe('mutual exclusion', () => {
   });
 
   test('accepts a synchronous callback', async () => {
-    // Some callers do only local work under the lock; they should not have to be async.
+
     const manager = createLockManager();
 
     assert.equal(await manager.withLock('key', () => 42), 42);
@@ -174,10 +116,7 @@ describe('mutual exclusion', () => {
 
 describe('key independence', () => {
   test('different keys do not contend', async () => {
-    /**
-     * The reason keys are namespaced per user. One person's provisioning must not block another's,
-     * so distinct keys run concurrently.
-     */
+
     const manager = createLockManager();
     const tracker = concurrencyTracker();
 
@@ -194,7 +133,7 @@ describe('key independence', () => {
   });
 
   test('distinct namespaces on the same id do not contend', async () => {
-    // servers:1 and backup:1 protect different resources for the same user.
+
     const manager = createLockManager();
     const tracker = concurrencyTracker();
 
@@ -211,7 +150,7 @@ describe('key independence', () => {
   });
 
   test('coerces the key to a string', async () => {
-    // A caller passing a numeric id must still hit the same lock as its string form.
+
     const manager = createLockManager();
     const tracker = concurrencyTracker();
 
@@ -230,10 +169,7 @@ describe('key independence', () => {
 
 describe('exception safety', () => {
   test('releases the lock when the callback throws', async () => {
-    /**
-     * A leaked lock is worse than no lock: the key is wedged permanently and the resulting failure
-     * appears later, in an unrelated request, with no obvious cause.
-     */
+
     const manager = createLockManager();
 
     await assert.rejects(
@@ -244,7 +180,6 @@ describe('exception safety', () => {
       /boom/,
     );
 
-    // The key must be usable immediately afterwards.
     assert.equal(await manager.withLock('key', async () => 'recovered'), 'recovered');
     assert.equal(manager.isLocked('key'), false);
   });
@@ -264,10 +199,7 @@ describe('exception safety', () => {
   });
 
   test('a failing holder does not prevent its successors from running', async () => {
-    /**
-     * The predecessor's rejection is swallowed while waiting, since it was already delivered to
-     * that caller. Without that, one failure would cascade into every queued request.
-     */
+
     const manager = createLockManager();
     const completed = [];
 
@@ -293,7 +225,7 @@ describe('exception safety', () => {
   });
 
   test('preserves the original error rather than wrapping it', async () => {
-    // Callers classify errors by type and code, so the lock must be transparent.
+
     const manager = createLockManager();
     const original = new AppError('specific failure', { code: 'PANEL_HTTP_409', status: 409 });
 
@@ -309,11 +241,7 @@ describe('exception safety', () => {
 
 describe('re-entrancy detection', () => {
   test('rejects a nested acquisition of the same key', async () => {
-    /**
-     * Recursive acquisition can never succeed: the outer hold is released only after its callback
-     * returns, and the callback is what is waiting. Without detection this hangs forever with no
-     * error and no log line, which is close to impossible to diagnose.
-     */
+
     const manager = createLockManager();
 
     await assert.rejects(
@@ -338,7 +266,7 @@ describe('re-entrancy detection', () => {
   });
 
   test('releases the outer lock after a re-entrancy failure', async () => {
-    // The detection must not itself wedge the key it was protecting.
+
     const manager = createLockManager();
 
     await assert.rejects(
@@ -354,10 +282,7 @@ describe('re-entrancy detection', () => {
   });
 
   test('permits nesting different keys', async () => {
-    /**
-     * Legitimate and used in practice: adminService holds account:<id> while serverService acquires
-     * servers:<id> beneath it.
-     */
+
     const manager = createLockManager();
 
     const result = await manager.withLock('account:1', async () =>
@@ -369,7 +294,7 @@ describe('re-entrancy detection', () => {
   });
 
   test('permits reacquiring a key sequentially', async () => {
-    // Only concurrent nesting is a deadlock; acquiring the same key one after another is fine.
+
     const manager = createLockManager();
 
     assert.equal(await manager.withLock('key', async () => 'first'), 'first');
@@ -379,10 +304,7 @@ describe('re-entrancy detection', () => {
 
 describe('timeout', () => {
   test('gives up waiting after the configured timeout', async () => {
-    /**
-     * A stuck holder must not wedge a key indefinitely. The waiter fails with a message the user
-     * can act on rather than hanging until the interaction token expires.
-     */
+
     const manager = createLockManager({ timeoutMs: 30 });
 
     const holder = manager.withLock('key', async () => {
@@ -412,7 +334,7 @@ describe('timeout', () => {
   });
 
   test('the timeout error carries a user-safe message', async () => {
-    // It reaches a Discord embed, so it must explain the situation without internals.
+
     const manager = createLockManager({ timeoutMs: 20 });
     const holder = manager.withLock('key', async () => tick(150));
 
@@ -425,10 +347,7 @@ describe('timeout', () => {
   });
 
   test('an abandoned waiter does not block its successors', async () => {
-    /**
-     * The timeout path releases its queue slot before throwing. Skipping that would let one
-     * timed-out waiter block every later request on the key.
-     */
+
     const manager = createLockManager({ timeoutMs: 25 });
 
     const holder = manager.withLock('key', async () => {
@@ -457,7 +376,7 @@ describe('timeout', () => {
   });
 
   test('a timeout of zero waits indefinitely', async () => {
-    // Opt-out for a caller that would rather queue than fail.
+
     const manager = createLockManager({ timeoutMs: 0 });
     const order = [];
 
@@ -475,10 +394,7 @@ describe('timeout', () => {
   });
 
   test('the default timeout is bounded', () => {
-    /**
-     * Well above any legitimate panel operation, but finite. An unbounded default would turn a
-     * stuck holder into a permanently unusable key.
-     */
+
     assert.ok(DEFAULT_TIMEOUT_MS > 0);
     assert.ok(DEFAULT_TIMEOUT_MS <= 120_000);
   });
@@ -486,11 +402,7 @@ describe('timeout', () => {
 
 describe('bookkeeping and leaks', () => {
   test('the map returns to empty after every lock is released', async () => {
-    /**
-     * The leak this guards against is subtle: a naive implementation stores a chained promise per
-     * key and never deletes it, so a public bot retains one entry per Discord user who has ever
-     * run a locked command.
-     */
+
     const manager = createLockManager();
 
     await Promise.all([
@@ -514,7 +426,7 @@ describe('bookkeeping and leaks', () => {
   });
 
   test('does not accumulate entries across repeated use', async () => {
-    // Simulates sustained traffic from many distinct users.
+
     const manager = createLockManager();
 
     for (let index = 0; index < 100; index += 1) {
@@ -547,7 +459,6 @@ describe('bookkeeping and leaks', () => {
       await tick(30);
     });
 
-    // Let the holder acquire before inspecting.
     await tick(5);
 
     observedLocked = manager.isLocked('key');
@@ -583,23 +494,64 @@ describe('bookkeeping and leaks', () => {
     assert.deepEqual(manager.activeKeys(), []);
   });
 
-  test('clear drops all bookkeeping', () => {
-    // Used by tests between cases; unsafe while work is in flight.
+  test('clear refuses to discard active locks', async () => {
     const manager = createLockManager();
-
-    manager.withLock('key', async () => tick(50));
+    const work = manager.withLock('key', async () => tick(5));
+    assert.throws(() => manager.clear(), { code: 'LOCK_ACTIVE' });
+    await work;
     manager.clear();
+    assert.equal(manager.size(), 0);
+  });
+});
 
+describe('async lock ownership', () => {
+  test('an independent request arriving after acquisition queues instead of reporting recursion', async () => {
+    const manager = createLockManager();
+    let release;
+    let acquired;
+    const ready = new Promise((resolve) => { acquired = resolve; });
+    const gate = new Promise((resolve) => { release = resolve; });
+    const order = [];
+    const first = manager.withLock('key', async () => {
+      order.push('first');
+      acquired();
+      await gate;
+    });
+    await ready;
+    const second = manager.withLock('key', () => order.push('second'));
+    assert.equal(manager.queueLength('key'), 2);
+    release();
+    await Promise.all([first, second]);
+    assert.deepEqual(order, ['first', 'second']);
+    assert.equal(manager.size(), 0);
+  });
+
+  test('nested acquisition after an await rejects without deadlocking', async () => {
+    const manager = createLockManager();
+    await manager.withLock('key', async () => {
+      await tick();
+      await assert.rejects(() => manager.withLock('key', () => {}), { code: 'LOCK_REENTRANT' });
+    });
+    assert.equal(manager.size(), 0);
+  });
+
+  test('a detached descendant can acquire after its ancestor releases the lock', async () => {
+    const manager = createLockManager();
+    let release;
+    let detached;
+    const gate = new Promise((resolve) => { release = resolve; });
+    await manager.withLock('key', () => {
+      detached = gate.then(() => manager.withLock('key', () => 42));
+    });
+    release();
+    assert.equal(await detached, 42);
     assert.equal(manager.size(), 0);
   });
 });
 
 describe('the queue warning threshold', () => {
   test('is a sane bound', () => {
-    /**
-     * Exceeding it logs a warning rather than failing, since a long queue is a signal of abuse or
-     * a stalled holder rather than an error in itself.
-     */
+
     assert.ok(QUEUE_WARN_THRESHOLD > 1);
     assert.ok(QUEUE_WARN_THRESHOLD <= 32);
   });
@@ -625,10 +577,7 @@ describe('the queue warning threshold', () => {
 
 describe('the shared manager', () => {
   test('is a usable lock manager', async () => {
-    /**
-     * src/index.js constructs its own and passes it to every service, but the module-level export
-     * is the default for a service constructed without one.
-     */
+
     assert.equal(typeof locks.withLock, 'function');
     assert.equal(await locks.withLock('test:shared', async () => 'ok'), 'ok');
     assert.equal(locks.isLocked('test:shared'), false);

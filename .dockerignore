@@ -109,7 +109,6 @@ coverage
 # Useful in the repository, dead weight in a container.
 docs
 *.md
-LICENSE
 
 
 # -----------------------------------------------------------------------------

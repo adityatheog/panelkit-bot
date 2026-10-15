@@ -1,29 +1,3 @@
-// Coded by Aditya | GitHub- @adityatheog
-
-/**
- * Tests for src/services/accountService.js.
- *
- * This service holds two invariants that the rest of the project depends on, and both are only
- * observable under failure — so that is where these tests spend their effort.
- *
- *   The panel and the local database must not drift. A panel account with no local row is invisible
- *   to the bot; a local row with no panel account produces confusing 404s on every subsequent
- *   command. The write order and the rollback are what prevent each direction, and a happy-path test
- *   exercises neither.
- *
- *   A destructive operation never reports success it did not achieve. Account deletion removes
- *   servers first, and if any server cannot be removed the whole operation aborts with nothing
- *   changed locally — because a user who reads "Account Deleted" will not go and check whether their
- *   servers are still consuming resources.
- *
- * Generated passwords get their own attention: they are returned exactly once for DM delivery, and
- * these tests assert they never reach the database, an error message or a log projection.
- *
- * The panel is a recording double, so no credentials and no network are needed. The database is real
- * but in-memory, because the interesting failures involve genuine constraint violations rather than
- * simulated ones.
- */
-
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
@@ -31,6 +5,7 @@ import { AccountService, initAccountService, getAccountService, setAccountServic
 import { createDatabase } from '../src/database/db.js';
 import { validateConfig } from '../src/config/config.js';
 import { createLockManager } from '../src/utils/locks.js';
+import { ServerService } from '../src/services/serverService.js';
 import { AppError, NotFoundError, ValidationError } from '../src/utils/errors.js';
 
 const OWNER = '111111111111111111';
@@ -38,10 +13,8 @@ const OTHER = '222222222222222222';
 
 const DAY_MS = 86_400_000;
 
-/** An account old enough to satisfy a 90-day policy. */
 const OLD_ACCOUNT = Object.freeze({ id: OWNER, createdTimestamp: Date.now() - 200 * DAY_MS });
 
-/** An account too new for a 90-day policy. */
 const NEW_ACCOUNT = Object.freeze({ id: OTHER, createdTimestamp: Date.now() - 3 * DAY_MS });
 
 const CONFIG = validateConfig({
@@ -58,15 +31,6 @@ const ENV = Object.freeze({
   startingCredits: 0,
 });
 
-/**
- * Builds a recording double for the panel.
- *
- * Records every call in order, so the tests can assert the sequence — which is what proves the
- * rollback happened, or that the age check ran before any request.
- *
- * @param {Record<string, Function>} [overrides]
- * @returns {object}
- */
 function mockPanel(overrides = {}) {
   const calls = [];
   let nextUserId = 7;
@@ -74,7 +38,6 @@ function mockPanel(overrides = {}) {
   return {
     calls,
 
-    /** @returns {string[]} the method names called, in order */
     names: () => calls.map(([name]) => name),
 
     async createUser(payload) {
@@ -115,12 +78,6 @@ function mockPanel(overrides = {}) {
   };
 }
 
-/**
- * Builds a service over a fresh in-memory database.
- *
- * @param {{ panel?: object, env?: object, config?: object }} [options]
- * @returns {{ db: object, panel: object, service: AccountService, locks: object }}
- */
 function setup({ panel = mockPanel(), env = ENV, config = CONFIG } = {}) {
   const db = createDatabase(':memory:');
   const locks = createLockManager();
@@ -128,14 +85,6 @@ function setup({ panel = mockPanel(), env = ENV, config = CONFIG } = {}) {
   return { db, panel, locks, service: new AccountService({ db, panel, config, env, locks }) };
 }
 
-/**
- * Records a server for a user, so deletion paths have something to remove.
- *
- * @param {object} db
- * @param {string} discordId
- * @param {{ identifier?: string, panelServerId?: number }} [options]
- * @returns {object}
- */
 function seedServer(db, discordId, { identifier = 'a1b2c3d4', panelServerId = 501 } = {}) {
   return db.createServer({
     discordId,
@@ -189,10 +138,7 @@ describe('createAccount: the account age policy', () => {
   });
 
   test('reports how long the user must wait', () => {
-    /**
-     * A bare refusal sends the user to ask an administrator. Naming the remaining days answers the
-     * question they would have asked.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -221,7 +167,7 @@ describe('createAccount: the account age policy', () => {
   });
 
   test('skips the check when the threshold is zero', async () => {
-    // ACCOUNT_AGE_DAYS=0 is documented as disabling the policy.
+
     const { service, db } = setup({ env: { ...ENV, accountAgeDays: 0 } });
 
     try {
@@ -232,10 +178,7 @@ describe('createAccount: the account age policy', () => {
   });
 
   test('fails closed on an unusable creation timestamp', async () => {
-    /**
-     * A partial user object must not bypass the policy. The naive comparison yields NaN >= 90, which is
-     * false only by accident of comparison semantics.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -256,10 +199,7 @@ describe('createAccount: the account age policy', () => {
 
 describe('createAccount: provisioning', () => {
   test('creates the panel account, then the local record', async () => {
-    /**
-     * The order matters. Writing locally first would leave a row pointing at an account that does not
-     * exist if the panel call then failed.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -289,10 +229,7 @@ describe('createAccount: provisioning', () => {
   });
 
   test('links the Discord id into the panel record', async () => {
-    /**
-     * Stored as the panel user's last name, so an administrator browsing the panel can attribute an
-     * account to a Discord user when reconciling by hand.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -321,10 +258,7 @@ describe('createAccount: provisioning', () => {
   });
 
   test('never stores the generated password', async () => {
-    /**
-     * The password is returned once for DM delivery and stored nowhere. If it were persisted, an
-     * operator with database access would hold every user's credentials.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -353,7 +287,7 @@ describe('createAccount: provisioning', () => {
   });
 
   test('names the recovery command when refusing a duplicate', () => {
-    // A user who has lost their password needs `account reset`, not a second account.
+
     const { service, db } = setup();
 
     return service
@@ -370,10 +304,7 @@ describe('createAccount: provisioning', () => {
 
 describe('createAccount: credential collisions', () => {
   test('retries when the panel reports a taken username', async () => {
-    /**
-     * A ten-character random username has a vanishing collision probability, but the panel enforces
-     * uniqueness and a collision must produce a retry rather than a failed command.
-     */
+
     let attempts = 0;
 
     const panel = mockPanel({
@@ -434,10 +365,7 @@ describe('createAccount: credential collisions', () => {
   });
 
   test('does not retry an unrelated validation error', async () => {
-    /**
-     * Retrying blindly on any 422 would loop five times against a genuine configuration error, turning
-     * one clear failure into five confusing ones.
-     */
+
     let attempts = 0;
 
     const panel = mockPanel({
@@ -512,11 +440,7 @@ describe('createAccount: credential collisions', () => {
 
 describe('createAccount: rollback', () => {
   test('deletes the panel account when the local write fails', async () => {
-    /**
-     * The failure that actually happens in production: the panel creates the account, the local insert
-     * fails (disk full, a unique collision from a race, the database locked), and without rollback the
-     * user has a panel account whose password was generated, shown to nobody, and stored nowhere.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -553,10 +477,7 @@ describe('createAccount: rollback', () => {
   });
 
   test('propagates the original failure rather than a rollback error', async () => {
-    /**
-     * The caller needs to know why the operation failed. Replacing it with a rollback error would
-     * obscure the actual cause.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -574,14 +495,10 @@ describe('createAccount: rollback', () => {
   });
 
   test('still surfaces the original failure when the rollback also fails', async () => {
-    /**
-     * Both operations failed, so the panel account is orphaned. The service logs enough for an operator
-     * to clean up by hand and rethrows the original error rather than masking it.
-     */
+
     const panel = mockPanel({
       async deleteUser(id) {
-        // Recorded before throwing. Replacing the method without this makes the call
-        // invisible to panel.names(), which is what the rollback assertion inspects.
+
         this.calls.push(['deleteUser', id]);
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
       },
@@ -628,11 +545,7 @@ describe('createAccount: rollback', () => {
 
 describe('createAccount: concurrency', () => {
   test('two concurrent creations produce one account', async () => {
-    /**
-     * Without the per-user lock both calls pass the duplicate check, both create a panel account, and
-     * the second local insert fails on the unique constraint — leaving an orphaned panel account whose
-     * password was never delivered.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -659,7 +572,7 @@ describe('createAccount: concurrency', () => {
   });
 
   test('different users are not serialised against each other', async () => {
-    // One person's account creation must not block another's.
+
     const { service, db } = setup();
 
     try {
@@ -678,10 +591,7 @@ describe('createAccount: concurrency', () => {
 
 describe('createAccountForAdmin', () => {
   test('skips the account age policy', async () => {
-    /**
-     * The age check is an anti-abuse rule for open registration. An administrator vouching for someone
-     * supersedes it.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -694,7 +604,7 @@ describe('createAccountForAdmin', () => {
   });
 
   test('still refuses a duplicate', async () => {
-    // Only the age policy is bypassed; every other guarantee is shared.
+
     const { service, db } = setup();
 
     try {
@@ -763,10 +673,7 @@ describe('getAccountInfo', () => {
   });
 
   test('survives a panel outage, reporting it', async () => {
-    /**
-     * A panel outage must not break a read-only command. panelReachable distinguishes "no panel
-     * account" from "could not check", which is what a user needs when their login is failing.
-     */
+
     const panel = mockPanel({
       async getApplicationUser() {
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
@@ -815,7 +722,7 @@ describe('getAccountInfo', () => {
   });
 
   test('never includes a password', async () => {
-    // There is nothing to include: the password was returned once and stored nowhere.
+
     const { service, db } = setup();
 
     try {
@@ -878,10 +785,7 @@ describe('resetPassword', () => {
   });
 
   test('propagates a panel failure without altering local state', async () => {
-    /**
-     * Nothing local changes on a reset, so a failure leaves the account exactly as it was — which is
-     * what lets the command tell the user their existing password still works.
-     */
+
     const panel = mockPanel({
       async updateUserPassword() {
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
@@ -916,11 +820,106 @@ describe('resetPassword', () => {
   });
 });
 
+describe('account and server lifecycle', () => {
+  test('deletion waits for in-flight provisioning and removes the new server', async () => {
+    let release;
+    let entered;
+    const ready = new Promise((resolve) => { entered = resolve; });
+    const gate = new Promise((resolve) => { release = resolve; });
+    const panel = mockPanel({
+      async getEgg() { return { variables: [], startup: 'node .' }; },
+      async createServer() {
+        entered();
+        await gate;
+        return { id: 501, identifier: 'a1b2c3d4' };
+      },
+    });
+    const { service, db, locks } = setup({ panel });
+    const servers = new ServerService({ db, panel, locks, config: CONFIG, env: ENV });
+    try {
+      await service.createAccountForAdmin(OLD_ACCOUNT);
+      const creation = servers.createServer({ discordId: OWNER, eggKey: 'nodejs', name: 'Test Server' });
+      await ready;
+      const deletion = service.deleteAccount(OWNER);
+      release();
+      await creation;
+      const result = await deletion;
+      assert.equal(result.deletedServers, 1);
+      assert.ok(panel.calls.some(([name, id]) => name === 'deleteServer' && id === 501));
+      assert.equal(db.getUser(OWNER), null);
+      assert.equal(db.countServers(), 0);
+      assert.equal(locks.size(), 0);
+    } finally {
+      release();
+      db.close();
+    }
+  });
+
+  test('provisioning after deletion begins cannot use a deleted account', async () => {
+    let release;
+    let entered;
+    const ready = new Promise((resolve) => { entered = resolve; });
+    const gate = new Promise((resolve) => { release = resolve; });
+    const panel = mockPanel({ async deleteUser() { entered(); await gate; return true; } });
+    const { service, db, locks } = setup({ panel });
+    const servers = new ServerService({ db, panel, locks, config: CONFIG, env: ENV });
+    try {
+      await service.createAccountForAdmin(OLD_ACCOUNT);
+      const deletion = service.deleteAccount(OWNER);
+      await ready;
+      const denied = assert.rejects(
+        () => servers.createServer({ discordId: OWNER, eggKey: 'nodejs', name: 'Test Server' }),
+        NotFoundError,
+      );
+      release();
+      await Promise.all([deletion, denied]);
+      assert.equal(db.getUser(OWNER), null);
+      assert.ok(!panel.names().includes('createServer'));
+    } finally {
+      release();
+      db.close();
+    }
+  });
+
+  test('a stale confirmation cannot delete a replacement account', async () => {
+    const { service, db, panel } = setup();
+    try {
+      await service.createAccountForAdmin(OLD_ACCOUNT);
+      const id = db.getUser(OWNER).panel_id;
+      await assert.rejects(() => service.deleteAccount(OWNER, { expectedPanelId: id + 1 }), ValidationError);
+      assert.equal(db.getUser(OWNER).panel_id, id);
+      assert.ok(!panel.names().includes('deleteUser'));
+    } finally {
+      db.close();
+    }
+  });
+
+  test('partial deletion reports irreversible progress instead of claiming no changes', async () => {
+    const panel = mockPanel({ async deleteServer(id) {
+      if (id === 502) throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
+      return true;
+    } });
+    const { service, db } = setup({ panel });
+    try {
+      await service.createAccountForAdmin(OLD_ACCOUNT);
+      seedServer(db, OWNER);
+      seedServer(db, OWNER, { identifier: 'bbbbbbbb', panelServerId: 502 });
+      await assert.rejects(() => service.deleteAccount(OWNER), (err) => {
+        assert.match(err.userMessage, /1 server\(s\) were removed/);
+        assert.doesNotMatch(err.userMessage, /Nothing has been changed/);
+        return err.code === 'ACCOUNT_DELETE_PARTIAL';
+      });
+      assert.equal(db.countUserServers(OWNER), 2);
+      assert.ok(db.getUser(OWNER));
+    } finally {
+      db.close();
+    }
+  });
+});
+
 describe('deleteAccount: the successful path', () => {
   test('removes servers, then the panel account, then the local rows', async () => {
-    /**
-     * The order is forced by the panel: it refuses to delete a user who still owns servers.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -989,11 +988,7 @@ describe('deleteAccount: the successful path', () => {
 
 describe('deleteAccount: partial failure', () => {
   test('aborts with nothing changed when a server cannot be deleted', async () => {
-    /**
-     * The invariant that matters most in this file. A user who reads "Account Deleted" will not go and
-     * check whether their servers are still consuming resources, so a partial success is reported as a
-     * failure with nothing removed locally.
-     */
+
     const panel = mockPanel({
       async deleteServer(id) {
         this.calls.push(['deleteServer', id]);
@@ -1020,8 +1015,7 @@ describe('deleteAccount: partial failure', () => {
     }
   });
 
-  test('says plainly that nothing was changed', async () => {
-    // The message is what the user reads, so it must not imply partial progress.
+  test('accurately reports retained records when no server could be removed', async () => {
     const panel = mockPanel({
       async deleteServer() {
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
@@ -1036,7 +1030,7 @@ describe('deleteAccount: partial failure', () => {
 
       await assert.rejects(
         () => service.deleteAccount(OWNER),
-        (err) => /Nothing has been changed/.test(err.userMessage),
+        (err) => /0 server\(s\).*local records were kept/.test(err.userMessage),
       );
     } finally {
       db.close();
@@ -1098,10 +1092,7 @@ describe('deleteAccount: partial failure', () => {
 
 describe('deleteAccount: already-absent resources', () => {
   test('treats a 404 on a server as already deleted', async () => {
-    /**
-     * The desired end state — that server no longer existing — has been reached by other means, so it
-     * counts as success rather than blocking the deletion.
-     */
+
     const panel = mockPanel({
       async deleteServer() {
         throw new AppError('not found', { code: 'PANEL_HTTP_404', status: 404 });
@@ -1171,14 +1162,10 @@ describe('deleteAccount: already-absent resources', () => {
 
 describe('deleteAccount: the account step fails', () => {
   test('keeps the local rows when the panel account cannot be deleted', async () => {
-    /**
-     * Servers are gone but the account remains. The local rows are kept so the user can retry and so
-     * the Discord-to-panel mapping is not lost — without it, nothing could find the account again.
-     */
+
     const panel = mockPanel({
       async deleteUser(id) {
-        // Recorded before throwing. Replacing the method without this makes the call
-        // invisible to panel.names(), which is what the rollback assertion inspects.
+
         this.calls.push(['deleteUser', id]);
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
       },
@@ -1202,11 +1189,10 @@ describe('deleteAccount: the account step fails', () => {
   });
 
   test('tells the user their servers were removed', async () => {
-    // Accurate about what did happen, so the user is not surprised to find their servers gone.
+
     const panel = mockPanel({
       async deleteUser(id) {
-        // Recorded before throwing. Replacing the method without this makes the call
-        // invisible to panel.names(), which is what the rollback assertion inspects.
+
         this.calls.push(['deleteUser', id]);
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
       },
@@ -1220,8 +1206,7 @@ describe('deleteAccount: the account step fails', () => {
 
       await assert.rejects(
         () => service.deleteAccount(OWNER),
-        // The intent is that the user is told to retry, not the exact wording. The source says
-        // "Please run the command again in a few minutes".
+
         (err) => /servers were removed/.test(err.userMessage) && /again/i.test(err.userMessage),
       );
     } finally {
@@ -1232,10 +1217,7 @@ describe('deleteAccount: the account step fails', () => {
 
 describe('deleteAccount: concurrency', () => {
   test('two concurrent deletions produce one deletion', async () => {
-    /**
-     * Serialised per user. Without the lock both calls read the same server list and both attempt the
-     * panel deletions, producing spurious 404 handling and a confusing double report.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -1258,7 +1240,7 @@ describe('deleteAccount: concurrency', () => {
   });
 
   test('a creation cannot interleave with a deletion', async () => {
-    // Both take the same per-user lock, so the outcome is deterministic rather than racy.
+
     const { service, db } = setup();
 
     try {
@@ -1279,6 +1261,22 @@ describe('deleteAccount: concurrency', () => {
 });
 
 describe('credits', () => {
+  test('fractional and unsafe amounts cannot alter a balance', async () => {
+    const { service, db } = setup({ env: { ...ENV, startingCredits: 100 } });
+    try {
+      await service.createAccount(OLD_ACCOUNT);
+      for (const amount of [1.9, Number.MAX_SAFE_INTEGER + 1]) {
+        assert.throws(() => service.grantCredits(OWNER, amount), ValidationError);
+        assert.throws(() => service.spendCredits(OWNER, amount), ValidationError);
+        assert.equal(db.getCredits(OWNER), 100);
+      }
+      assert.throws(() => service.grantCredits(OWNER, Number.MAX_SAFE_INTEGER), ValidationError);
+      assert.equal(db.getCredits(OWNER), 100);
+    } finally {
+      db.close();
+    }
+  });
+
   test('reads a balance', async () => {
     const { service, db } = setup({ env: { ...ENV, startingCredits: 25 } });
 
@@ -1292,10 +1290,7 @@ describe('credits', () => {
   });
 
   test('refuses to read a balance for an account that does not exist', async () => {
-    /**
-     * Distinguished from a zero balance, since the remedy differs: create an account rather than earn
-     * credits.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -1363,10 +1358,7 @@ describe('credits', () => {
   });
 
   test('refuses an overdraft and reports both figures', async () => {
-    /**
-     * The check lives in the database layer's WHERE clause, so the read and the write are one atomic
-     * statement. The message names the cost and the balance so the user knows how short they are.
-     */
+
     const { service, db } = setup({ env: { ...ENV, startingCredits: 5 } });
 
     try {
@@ -1423,10 +1415,7 @@ describe('the shared instance', () => {
   });
 
   test('getAccountService refuses before initialisation', () => {
-    /**
-     * A clear error beats a TypeError on undefined, since this can only happen through a wiring mistake
-     * in the startup sequence.
-     */
+
     setAccountServiceForTests(null);
 
     assert.throws(

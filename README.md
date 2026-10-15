@@ -177,7 +177,7 @@ npm run verify && npm run deploy && npm start
 
 | | |
 | --- | --- |
-| **Node.js ≥ 20.11** | The floor is 20.11 for `import.meta.dirname`. Node 22 is tested in CI. |
+| **Node.js ≥ 20.11** | Compatibility floor. Use maintained Node 22 or 24 LTS in production; Node 20 is end-of-life. CI covers all three. |
 | **C++ toolchain** | `better-sqlite3` compiles a native addon: `python3 make g++`. Not needed with Docker. |
 | **Discord application** | With a bot user and the **Message Content Intent** enabled. |
 | **Pterodactyl Panel 1.x+** | Reachable over HTTP or HTTPS from the bot. |
@@ -291,7 +291,7 @@ Startup fails with **one** error listing *every* missing or invalid variable —
 | `defaults.limits` | `memory`/`disk` in MB, `cpu` percent, `io` 10–1000. Zero memory or disk is refused. |
 | `subuser.defaultPermissions` | Granted by `server subuser add`. `settings.delete` is refused. |
 | `backups.maxInlineBytes` | Archives up to this are attached; larger become links. |
-| `logs.maxUploadBytes` | Log attachments truncated to this, keeping the tail. |
+| `logs.maxUploadBytes` | DM-only log attachments truncated to this, keeping the tail. HTTP log downloads are capped at 32 MiB; larger files require the panel file manager. |
 | `plans` | The `plans` catalogue. Empty means the command says so. |
 | `eggs.<key>.environment` | Overrides for egg variables. Required ones with no default go here. |
 | `eggs.<key>.logPaths` | Absolute paths tried in order by `server logs`. |
@@ -357,6 +357,14 @@ journalctl -u panelkit -f
 
 > [!CAUTION]
 > **Run one instance.** Component sessions and per-user locks live in process memory. Two instances would each hold half the sessions, and the locks that keep users within `FREE_SERVER_LIMIT` wouldn't serialise across them. Two gateway connections on one token also means every command executes twice.
+
+The container uses Node 22.23.3 and requires the committed lockfile. Build and runtime stages use the same Node and Debian versions; rebuild after dependency upgrades rather than copying native modules from another runtime.
+
+If Docker Hub rate-limits your build, the official Docker image mirror is an alternative: `docker build --build-arg NODE_IMAGE=public.ecr.aws/docker/library/node:22.23.3-bookworm-slim -t panelkit-bot .`. Keep the same trusted, pinned image for both stages.
+
+Account deletion serialises with server creation and deletion. Confirmations are single-use and tied to the panel account shown in the prompt. Panel operations are not a distributed transaction: if only some servers are removed, the account and local ownership records remain for a retry, but the removed servers cannot be restored. Only servers tracked by this bot are deleted automatically; unrelated panel servers must be reconciled by an administrator.
+
+Admin reconciliation pages through the supported Application server endpoint and compares each returned `user` owner ID locally. It does not use unsupported owner filters. More than 100 pages or malformed responses fail explicitly instead of producing a misleading partial list. Normal API response bodies are limited to 8 MiB.
 
 ---
 

@@ -1,33 +1,3 @@
-// Coded by Aditya | GitHub- @adityatheog
-
-/**
- * Tests for src/services/serverService.js.
- *
- * This service is where authorisation actually happens, so these tests are organised around that
- * first. Every method that touches a user's server resolves the chain
- *
- *   Discord user id -> local database row -> Pterodactyl resource
- *
- * through requireOwnedServer(). If a future method forgets to call it, that method has no
- * authorisation at all — which is why there is one test per public method asserting that a stranger
- * is refused *and* that no panel request was made. Testing the refusal alone would pass against an
- * implementation that queried the panel first and checked ownership afterwards, leaking existence
- * through timing and through the panel's own audit log.
- *
- * Three other properties get sustained attention:
- *
- *   The limit check is inside the per-user lock. Two concurrent creations must not both pass it.
- *
- *   A missing server and a foreign server produce the same error. Anything else turns the
- *   8-character identifier space into something worth probing.
- *
- *   The orphan path is honest. When the panel provisions successfully and the local write fails, the
- *   server is deliberately not rolled back — deleting a server that may already be installing risks
- *   destroying data — so the error names the identifier the operator needs.
- *
- * The panel is a recording double; the database is real but in-memory.
- */
-
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
@@ -89,15 +59,6 @@ const ENV = Object.freeze({
   freeServerLimit: 1,
 });
 
-/**
- * Builds a recording double for the panel.
- *
- * Every call is recorded in order, which is what lets a test assert that a refused operation made no
- * panel request at all.
- *
- * @param {Record<string, Function>} [overrides]
- * @returns {object}
- */
 function mockPanel(overrides = {}) {
   const calls = [];
   let nextServerId = 500;
@@ -105,10 +66,8 @@ function mockPanel(overrides = {}) {
   return {
     calls,
 
-    /** @returns {string[]} the method names called, in order */
     names: () => calls.map(([name]) => name),
 
-    /** @param {string} name @returns {boolean} */
     called: (name) => calls.some(([called]) => called === name),
 
     async getEgg(nestId, eggId) {
@@ -242,12 +201,6 @@ function mockPanel(overrides = {}) {
   };
 }
 
-/**
- * Builds a service over a fresh in-memory database, seeding two users.
- *
- * @param {{ panel?: object, env?: object, config?: object, seedServer?: boolean }} [options]
- * @returns {{ db: object, panel: object, service: ServerService }}
- */
 function setup({ panel = mockPanel(), env = ENV, config = CONFIG, seedServer = false } = {}) {
   const db = createDatabase(':memory:');
   const locks = createLockManager();
@@ -304,10 +257,7 @@ describe('requireOwnedServer', () => {
   });
 
   test('produces an identical error for a foreign and a nonexistent server', () => {
-    /**
-     * Anything else leaks existence. With eight lowercase alphanumerics the identifier space is
-     * enumerable, so a distinguishable response would make probing worthwhile.
-     */
+
     const { service, db } = setup({ seedServer: true });
 
     try {
@@ -352,11 +302,7 @@ describe('requireOwnedServer', () => {
 });
 
 describe('authorisation across every method', () => {
-  /**
-   * The gate applies to every user-triggered operation, and each must refuse before contacting the
-   * panel. Reaching the panel first would leak existence through the panel's own audit log and through
-   * response timing, even if the bot then refused.
-   */
+
   const operations = [
     ['power', (service, id) => service.power({ discordId: id, identifier: 'a1b2c3d4', signal: 'start' })],
     ['usage', (service, id) => service.usage({ discordId: id, identifier: 'a1b2c3d4' })],
@@ -396,7 +342,7 @@ describe('authorisation across every method', () => {
   }
 
   test('a stranger cannot rename another user’s server', async () => {
-    // Asserting the effect as well as the refusal, in case a future change reordered the check.
+
     const { service, db } = setup({ seedServer: true });
 
     try {
@@ -429,10 +375,7 @@ describe('authorisation across every method', () => {
 
 describe('listEggChoices', () => {
   test('offers only fully configured eggs', () => {
-    /**
-     * Offering an egg with placeholder ids would produce an opaque panel 422 after the user has already
-     * named their server.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -476,8 +419,7 @@ describe('panelUrlFor', () => {
   });
 
   test('refuses to build a link from a malformed identifier', () => {
-    // The identifier is revalidated inside the builder, so a caller that skipped validation cannot
-    // produce a link to an arbitrary path.
+
     const { service, db } = setup();
 
     try {
@@ -534,10 +476,7 @@ describe('createServer: preconditions', () => {
   });
 
   test('refuses when the limit is zero', async () => {
-    /**
-     * FREE_SERVER_LIMIT=0 pauses provisioning. The message says so rather than reporting a limit of
-     * zero, which reads as a bug.
-     */
+
     const { service, db } = setup({ env: { ...ENV, freeServerLimit: 0 } });
 
     try {
@@ -644,9 +583,7 @@ describe('createServer: environment construction', () => {
   });
 
   test('lets a config override win over the egg default', async () => {
-    /**
-     * An operator pinning a value must not have it silently replaced by the egg's default.
-     */
+
     const config = validateConfig({
       colors: { primary: '#2B2D31', error: '#ED4245' },
       eggs: {
@@ -674,10 +611,7 @@ describe('createServer: environment construction', () => {
   });
 
   test('passes through an override the egg does not declare', async () => {
-    /**
-     * Some eggs read variables their install script defines but the egg does not declare, so an
-     * undeclared override is forwarded rather than dropped.
-     */
+
     const config = validateConfig({
       colors: { primary: '#2B2D31', error: '#ED4245' },
       eggs: {
@@ -700,10 +634,7 @@ describe('createServer: environment construction', () => {
   });
 
   test('refuses when a required variable has no value anywhere', async () => {
-    /**
-     * Reported as a configuration error before the server is created. The panel would otherwise answer
-     * with an opaque 422 that names a variable the user has never heard of.
-     */
+
     const panel = mockPanel({
       async getEgg() {
         return {
@@ -774,10 +705,7 @@ describe('createServer: environment construction', () => {
   });
 
   test('falls back to the egg’s image when none is configured', async () => {
-    /**
-     * Only reachable for an egg marked configured by other means; the fallback exists so a partially
-     * specified egg still provisions with the panel's own default.
-     */
+
     const panel = mockPanel({
       async getEgg() {
         return {
@@ -835,11 +763,7 @@ describe('createServer: persistence', () => {
   });
 
   test('reports an orphaned server when the local write fails', async () => {
-    /**
-     * The panel provisioned successfully and the bot cannot record it. Deliberately not rolled back:
-     * deleting a server that may already be installing risks destroying files, and the panel is the
-     * authoritative store. The error names the identifier the operator needs to reconcile.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -870,14 +794,11 @@ describe('createServer: persistence', () => {
 
 describe('createServer: concurrency and the limit', () => {
   test('two concurrent creations cannot both pass the limit', async () => {
-    /**
-     * The race this service's lock exists to close. Both calls read a count of zero, both pass the
-     * check, and without serialisation the user ends up with two servers under a limit of one.
-     */
+
     const panel = mockPanel({
       async createServer(payload) {
         this.calls.push(['createServer', payload]);
-        // Yield, as a real panel request would.
+
         await new Promise((resolve) => setTimeout(resolve, 5));
         return { id: 500 + this.calls.length, identifier: `a1b2c3d${this.calls.length}`, uuid: 'u', name: payload.name };
       },
@@ -906,7 +827,7 @@ describe('createServer: concurrency and the limit', () => {
   });
 
   test('different users are not serialised against each other', async () => {
-    // One person's provisioning must not block another's.
+
     const { service, panel, db } = setup();
 
     try {
@@ -927,10 +848,7 @@ describe('createServer: concurrency and the limit', () => {
   });
 
   test('bypassLimit permits provisioning beyond the limit', async () => {
-    /**
-     * Reachable only from adminService. No user input path sets this flag, and the user-facing path is
-     * asserted to still refuse in the test above.
-     */
+
     const panel = mockPanel({
       async createServer(payload) {
         this.calls.push(['createServer', payload]);
@@ -952,7 +870,7 @@ describe('createServer: concurrency and the limit', () => {
   });
 
   test('bypassLimit still requires a panel account', async () => {
-    // Only the limit is bypassed; every other precondition holds.
+
     const { service, db } = setup();
 
     try {
@@ -984,10 +902,7 @@ describe('deleteServer', () => {
   });
 
   test('removes the local record even when the panel reports 404', async () => {
-    /**
-     * A phantom record would count against the user's limit forever, so a server deleted directly in
-     * the panel must still free its slot here.
-     */
+
     const panel = mockPanel({
       async deleteServer() {
         throw new AppError('not found', { code: 'PANEL_HTTP_404', status: 404 });
@@ -1007,10 +922,7 @@ describe('deleteServer', () => {
   });
 
   test('keeps the local record when the panel fails for another reason', async () => {
-    /**
-     * The server still exists on the panel, so dropping the record would orphan it — the user would be
-     * unable to reach or delete it through the bot.
-     */
+
     const panel = mockPanel({
       async deleteServer() {
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
@@ -1050,10 +962,7 @@ describe('deleteServer', () => {
 
 describe('power', () => {
   test('sends the signal after checking the server state', async () => {
-    /**
-     * The state read comes first because the panel rejects power actions during installation,
-     * suspension and transfer with a bare 409 that tells a user nothing.
-     */
+
     const { service, panel, db } = setup({ seedServer: true });
 
     try {
@@ -1198,10 +1107,7 @@ describe('usage and info', () => {
   });
 
   test('info tolerates missing resources', async () => {
-    /**
-     * A server that has never booted returns no resources but still has useful configuration. Failing
-     * would make `server info` useless exactly when a user is trying to work out why nothing started.
-     */
+
     const panel = mockPanel({
       async getResources() {
         throw new AppError('no statistics', { code: 'PANEL_HTTP_409', status: 409 });
@@ -1241,7 +1147,7 @@ describe('usage and info', () => {
   });
 
   test('info fails only when both panel reads fail', async () => {
-    // Both failing means the server is genuinely unreachable, which is worth reporting.
+
     const panel = mockPanel({
       async getClientServer() {
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
@@ -1290,9 +1196,7 @@ describe('listServers and listWithState', () => {
   });
 
   test('degrades a failed state read to unknown', async () => {
-    /**
-     * A list of servers is still the answer to "what do I own" when one node is unreachable.
-     */
+
     const panel = mockPanel({
       async getResources() {
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
@@ -1322,10 +1226,7 @@ describe('listServers and listWithState', () => {
   });
 
   test('bounds the number of state lookups', async () => {
-    /**
-     * Each lookup is a panel request. A user with an unusually large allocation must not produce an
-     * unbounded fan-out, so servers past the cap report unknown rather than being queried.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -1371,10 +1272,7 @@ describe('rename', () => {
   });
 
   test('refuses a no-op rename', async () => {
-    /**
-     * A panel request for no change, and a confusing "renamed" confirmation showing the same name
-     * twice.
-     */
+
     const { service, panel, db } = setup({ seedServer: true });
 
     try {
@@ -1523,15 +1421,11 @@ describe('changeImage', () => {
   });
 
   test('refuses an image not on the allowlist', async () => {
-    /**
-     * Free-form images are never accepted. A user selecting an arbitrary container would be running
-     * arbitrary code on the operator's node.
-     */
+
     const { service, panel, db } = setup({ seedServer: true });
 
     try {
-      // No trailing-whitespace case: the value is trimmed and then matched against the
-      // allowlist, so it resolves to an image that IS allowed. Nothing unauthorised passes.
+
       for (const image of ['ghcr.io/attacker/backdoor:1', 'node:latest', '', 'ghcr.io/example/node:21']) {
         await assert.rejects(
           () => service.changeImage({ discordId: OWNER, identifier: 'a1b2c3d4', image }),
@@ -1585,7 +1479,7 @@ describe('changeImage', () => {
   });
 
   test('imageChoicesFor returns an empty list for an unknown egg type', () => {
-    // A server whose egg was removed from config.json must not throw.
+
     const { service, db } = setup();
 
     try {
@@ -1669,10 +1563,7 @@ describe('logs', () => {
   });
 
   test('propagates a genuine panel fault rather than masking it', async () => {
-    /**
-     * The distinction that matters. A 500 while reading the log would otherwise be reported as "no
-     * logs found", sending the user to check their egg configuration when the real problem is the node.
-     */
+
     const panel = mockPanel({
       async getFileContents() {
         throw new AppError('internal error', { code: 'PANEL_HTTP_500', status: 500 });
@@ -1688,6 +1579,18 @@ describe('logs', () => {
       );
     } finally {
       db.close();
+    }
+  });
+
+  test('propagates network and download-size faults without misreporting a missing log', async () => {
+    for (const code of ['PANEL_NETWORK_ETIMEDOUT', 'PANEL_NETWORK_ERR_BAD_RESPONSE']) {
+      const panel = mockPanel({ async getFileContents() { throw new AppError('failed', { code }); } });
+      const { service, db } = setup({ panel, seedServer: true });
+      try {
+        await assert.rejects(() => service.logs({ discordId: OWNER, identifier: 'a1b2c3d4' }), { code });
+      } finally {
+        db.close();
+      }
     }
   });
 
@@ -1734,7 +1637,7 @@ describe('logs', () => {
   });
 
   test('falls back to a default path for an unknown egg type', async () => {
-    // A server whose egg was removed from config.json must still attempt a sensible path.
+
     const { service, panel, db } = setup();
 
     try {
@@ -1808,10 +1711,7 @@ describe('sub-users', () => {
   });
 
   test('refuses a duplicate, matching case-insensitively', async () => {
-    /**
-     * The panel treats addresses case-insensitively, so a case-sensitive check here would permit a
-     * duplicate the panel then rejects with a validation error.
-     */
+
     const { service, panel, db } = setup({ seedServer: true });
 
     try {
@@ -1827,10 +1727,7 @@ describe('sub-users', () => {
   });
 
   test('refuses the owner’s own address', async () => {
-    /**
-     * They already own the server, and Pterodactyl rejects an owner as their own sub-user — with a
-     * message the user cannot act on.
-     */
+
     const { service, panel, db } = setup({ seedServer: true });
 
     try {
@@ -1885,10 +1782,7 @@ describe('sub-users', () => {
   });
 
   test('removes a sub-user by resolving the email to a UUID', async () => {
-    /**
-     * No internal identifier is ever accepted from a user, which keeps panel UUIDs out of the command
-     * surface entirely.
-     */
+
     const { service, panel, db } = setup({ seedServer: true });
 
     try {
@@ -1925,10 +1819,7 @@ describe('sub-users', () => {
   });
 
   test('two concurrent additions of the same email produce one sub-user', async () => {
-    /**
-     * Serialised per server. Without the lock both calls read the same sub-user list and both pass the
-     * duplicate check.
-     */
+
     let created = 0;
 
     const panel = mockPanel({
@@ -1962,10 +1853,7 @@ describe('sub-users', () => {
 
 describe('backup', () => {
   test('archives, downloads and cleans up a small archive', async () => {
-    /**
-     * Small archives are attached to a DM, so the temporary file is removed afterwards — a backup
-     * nobody asked to keep should not consume the user's disk quota.
-     */
+
     const { service, panel, db } = setup({ seedServer: true });
 
     try {
@@ -2003,10 +1891,7 @@ describe('backup', () => {
   });
 
   test('delivers a large archive as a link and leaves it in place', async () => {
-    /**
-     * Deleting the file would invalidate the link the user is about to use, so the command reports that
-     * it remains and how to remove it.
-     */
+
     const panel = mockPanel({
       async compressFiles(identifier, payload) {
         this.calls.push(['compressFiles', identifier, payload]);
@@ -2053,10 +1938,7 @@ describe('backup', () => {
   });
 
   test('still delivers the archive when cleanup fails', async () => {
-    /**
-     * A failed cleanup costs the user disk space, not data, so it is logged rather than surfaced as a
-     * failed backup.
-     */
+
     const panel = mockPanel({
       async deleteFiles() {
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
@@ -2090,7 +1972,7 @@ describe('backup', () => {
   });
 
   test('enforces the configured size limit when downloading', async () => {
-    // The limit is passed to the fetch so axios aborts the transfer rather than buffering it.
+
     const { service, panel, db } = setup({ seedServer: true });
 
     try {
@@ -2105,10 +1987,7 @@ describe('backup', () => {
   });
 
   test('two concurrent backups of one server are serialised', async () => {
-    /**
-     * Compressing the same directory twice at once wastes node resources and can produce two archives
-     * competing for the same filename.
-     */
+
     let concurrent = 0;
     let maxConcurrent = 0;
 

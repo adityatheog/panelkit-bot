@@ -1,48 +1,10 @@
-// Coded by Aditya | GitHub- @adityatheog
-
-/**
- * Project audit.
- *
- * Answers a broader question than scripts/check.js: is this project complete and
- * internally consistent? Where check.js verifies that files parse and imports resolve,
- * this verifies structure — that every expected file exists, that the command tree
- * matches what the documentation claims, that both invocation surfaces are wired, that
- * the configuration validates, that the database initialises, and that nothing looks
- * like a committed secret or an unfinished placeholder.
- *
- * It runs without credentials. Every check is either static or uses an in-memory
- * database, so it is safe in CI and safe against a fresh clone before anything is
- * configured. Placeholder values in config.json are expected on a fresh clone and are
- * reported as information rather than as failures.
- *
- * The design goal is that "audited for missing files, placeholders, dependency issues
- * and startup problems" is something a reader can verify in one command rather than take
- * on trust. Every check reports independently, so one run surfaces every problem instead
- * of stopping at the first.
- *
- * Exit code 0 means every check passed. Exit code 1 means at least one failed.
- *
- * Usage:
- *   node scripts/verify-project.js            Run every check.
- *   node scripts/verify-project.js --quiet     Print only failures and the summary.
- *   node scripts/verify-project.js --help      Show usage.
- */
-
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-/** Project root, one level above this script. */
 const ROOT = path.resolve(import.meta.dirname, '..');
 
-/**
- * The documented command tree.
- *
- * Duplicated here deliberately. The point of the audit is to check the implementation
- * against an independent statement of what it should be — deriving this from the registry
- * would make the assertion vacuous, and a command silently renamed would pass.
- */
 const EXPECTED_TREE = Object.freeze({
   Account: ['account create', 'account delete', 'account info', 'account reset'],
   Admin: ['create', 'admin prune', 'admin servers', 'admin suspend', 'admin unsuspend', 'admin user'],
@@ -66,15 +28,13 @@ const EXPECTED_TREE = Object.freeze({
 const EXPECTED_COMMAND_COUNT = 25;
 const EXPECTED_CATEGORY_COUNT = 5;
 
-/** Files without which the project is incomplete. */
 const REQUIRED_FILES = Object.freeze([
-  // Foundation
+
   'package.json',
   'config.json',
   '.env.example',
   '.gitignore',
 
-  // Documentation
   'README.md',
   'LICENSE',
   'CONTRIBUTING.md',
@@ -82,7 +42,6 @@ const REQUIRED_FILES = Object.freeze([
   'CHANGELOG.md',
   'CODE_OF_CONDUCT.md',
 
-  // Deployment
   'Dockerfile',
   '.dockerignore',
   'docker-compose.yml',
@@ -90,48 +49,38 @@ const REQUIRED_FILES = Object.freeze([
   'deploy/panelkit.service',
   '.github/workflows/ci.yml',
 
-  // Scripts
   'scripts/check.js',
   'scripts/init-db.js',
   'scripts/verify-project.js',
   'scripts/healthcheck.js',
 
-  // Entry points
   'src/index.js',
   'src/deploy-commands.js',
 
-  // Command registry
   'src/commands/registry.js',
 
-  // Configuration
   'src/config/config.js',
   'src/config/env.js',
 
-  // Core
   'src/core/context.js',
   'src/core/cooldowns.js',
   'src/core/messageRouter.js',
   'src/core/reply.js',
 
-  // Persistence
   'src/database/db.js',
 
-  // Help
   'src/help/helpController.js',
   'src/help/helpMenu.js',
 
-  // Interactions
   'src/interactions/dashboard.js',
   'src/interactions/router.js',
 
-  // Services
   'src/services/accountService.js',
   'src/services/adminService.js',
   'src/services/pterodactyl.js',
   'src/services/retry.js',
   'src/services/serverService.js',
 
-  // Utilities
   'src/utils/embeds.js',
   'src/utils/errors.js',
   'src/utils/format.js',
@@ -143,12 +92,6 @@ const REQUIRED_FILES = Object.freeze([
   'src/utils/validation.js',
 ]);
 
-/**
- * Every test file that must exist — nineteen, one per module.
- *
- * There is no tests/subusers.test.js: sub-user coverage lives in
- * tests/serverService.test.js beside the rest of that service's authorisation tests.
- */
 const REQUIRED_TESTS = Object.freeze([
   'tests/accountService.test.js',
   'tests/adminService.test.js',
@@ -171,7 +114,6 @@ const REQUIRED_TESTS = Object.freeze([
   'tests/validation.test.js',
 ]);
 
-/** Every environment variable the code reads, which .env.example must document. */
 const EXPECTED_ENV_KEYS = Object.freeze([
   'DISCORD_TOKEN',
   'CLIENT_ID',
@@ -194,12 +136,6 @@ const EXPECTED_ENV_KEYS = Object.freeze([
   'NODE_ENV',
 ]);
 
-/**
- * Variables in .env.example that legitimately carry a value.
- *
- * Everything else must ship empty: a filled-in credential in a committed template is a
- * secret published to everyone who clones the repository.
- */
 const ENV_KEYS_WITH_DEFAULTS = Object.freeze(
   new Set([
     'DEFAULT_PREFIX',
@@ -216,7 +152,6 @@ const ENV_KEYS_WITH_DEFAULTS = Object.freeze(
   ]),
 );
 
-/** Markers that indicate unfinished work. */
 const PLACEHOLDER_PATTERNS = Object.freeze([
   /\bTODO\b/,
   /\bFIXME\b/,
@@ -229,29 +164,14 @@ const PLACEHOLDER_PATTERNS = Object.freeze([
   /the rest is similar/i,
 ]);
 
-/**
- * Patterns that look like committed credentials.
- *
- * Narrow on purpose: a broad "long random string" rule fires on every hash and lockfile
- * integrity field, and a scanner that cries wolf teaches people to ignore the audit.
- */
 const SECRET_PATTERNS = Object.freeze([
   { name: 'Pterodactyl application key', pattern: /\bptla_[A-Za-z0-9]{40,}\b/ },
   { name: 'Pterodactyl client key', pattern: /\bptlc_[A-Za-z0-9]{40,}\b/ },
   { name: 'Discord bot token', pattern: /\b[A-Za-z0-9_-]{24,28}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27,}\b/ },
 ]);
 
-/** The authorship header every JavaScript file carries. */
-const AUTHORSHIP_HEADER = '// Coded by Aditya | GitHub- @adityatheog';
-
 const SKIP_DIRECTORIES = Object.freeze(new Set(['node_modules', '.git', 'data', 'dist', 'coverage', 'logs']));
 
-/**
- * Entry points that execute on import.
- *
- * These call main() at module scope, so importing them would start the bot or contact
- * Discord. The import-resolution check reads their imports without importing them.
- */
 const SELF_EXECUTING = Object.freeze(
   new Set([
     path.join('src', 'index.js'),
@@ -259,33 +179,14 @@ const SELF_EXECUTING = Object.freeze(
   ]),
 );
 
-/** @type {Array<{ name: string, status: 'pass'|'fail'|'info', detail: string }>} */
 const results = [];
 
-/**
- * Records a check outcome.
- *
- * The `info` status exists for states that are correct on a fresh clone but worth
- * reporting, such as unfilled egg placeholders. Only `fail` affects the exit code.
- *
- * @param {string} name
- * @param {'pass'|'fail'|'info'} status
- * @param {string} [detail]
- * @returns {void}
- */
 function record(name, status, detail = '') {
   results.push({ name, status, detail });
 }
 
-/**
- * Recursively collects files matching an extension.
- *
- * @param {string} dir absolute path
- * @param {string} [extension]
- * @returns {Promise<string[]>} absolute paths, sorted for deterministic output
- */
 async function collect(dir, extension = '.js') {
-  /** @type {import('node:fs').Dirent[]} */
+
   let entries;
   try {
     entries = await fsp.readdir(dir, { withFileTypes: true });
@@ -306,16 +207,6 @@ async function collect(dir, extension = '.js') {
   return files;
 }
 
-/**
- * Truncates a list of problems for display, reporting how many were omitted.
- *
- * A check that fails on forty files should not print forty lines; the first few plus a
- * count is enough to act on.
- *
- * @param {string[]} problems
- * @param {number} [limit]
- * @returns {string}
- */
 function summarise(problems, limit = 8) {
   if (problems.length === 0) return '';
   if (problems.length <= limit) return problems.join('; ');
@@ -323,51 +214,13 @@ function summarise(problems, limit = 8) {
   return `${problems.slice(0, limit).join('; ')} … and ${problems.length - limit} more`;
 }
 
-/**
- * Removes comments from source before scanning it for import specifiers.
- *
- * Prose in a JSDoc block routinely contains phrases like
- *
- *   distinguishes "no panel account" from "could not check"
- *
- * and the specifier pattern in checkDependencies happily matches `from "could not check"`,
- * reporting it as an undeclared dependency. Stripping comments removes the source of most
- * such matches; the whitespace guard in checkDependencies catches the rest.
- *
- * Deliberately simple rather than a real parser. The guard on the line-comment pattern
- * avoids eating the // in a URL such as https://panel.example.com inside a string.
- *
- * @param {string} source
- * @returns {string}
- */
 function stripComments(source) {
-  // Block comments first. The lazy quantifier stops at the first closing delimiter rather
-  // than running to the last one in the file.
+
   const withoutBlocks = source.replace(/\/\*[\s\S]*?\*\//g, '');
 
-  /**
-   * Line comments, using a replacement FUNCTION rather than the string '$1'.
-   *
-   * This is the bug that corrupted this file. String.replace expands $1 inside a replacement
-   * STRING, so an injected helper containing '$1' had it substituted with the matched text —
-   * producing an unterminated string literal. A function receives the capture groups as
-   * arguments and performs no such expansion.
-   *
-   * The negated class before the double slash preserves the // in a URL such as
-   * https://panel.example.com when it appears inside a string.
-   */
   return withoutBlocks.replace(/(^|[^:\\])\/\/.*$/gm, (match, prefix) => prefix);
 }
 
-// ============================================================================
-// Checks
-// ============================================================================
-
-/**
- * Every required file is present.
- *
- * @returns {void}
- */
 function checkRequiredFiles() {
   const expected = [...REQUIRED_FILES, ...REQUIRED_TESTS];
   const missing = expected.filter((relative) => !fs.existsSync(path.join(ROOT, relative)));
@@ -379,24 +232,8 @@ function checkRequiredFiles() {
   );
 }
 
-/**
- * package.json is internally consistent.
- *
- * Three things matter here and each has bitten this project:
- *
- *   "type": "module" is what makes every .js file ESM. Without it the source does not
- *   parse and PM2's .cjs config becomes unnecessary.
- *
- *   engines must require at least 20.11, because src/index.js uses import.meta.dirname.
- *   A lower floor lets someone install on a Node that cannot run the code.
- *
- *   Every script must point at a file that exists. A renamed script fails at the moment
- *   someone runs it, which is usually in CI.
- *
- * @returns {void}
- */
 function checkManifest() {
-  /** @type {Record<string, unknown>} */
+
   let manifest;
   try {
     manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
@@ -421,8 +258,6 @@ function checkManifest() {
     problems.push(`main points at ${main}, which does not exist`);
   }
 
-  // Every path a script references must exist. Only the leading `node <file>` form is
-  // checked, which covers every script in this project.
   for (const [name, command] of Object.entries(manifest.scripts ?? {})) {
     for (const match of String(command).matchAll(/node\s+(?:--[\w-]+(?:=\S+)?\s+)*([\w./-]+\.js)/g)) {
       const target = match[1];
@@ -435,17 +270,10 @@ function checkManifest() {
   record('package.json is consistent', problems.length === 0 ? 'pass' : 'fail', summarise(problems));
 }
 
-/**
- * Dependencies are declared, pinned, and nothing undeclared is imported.
- *
- * @returns {Promise<void>}
- */
 async function checkDependencies() {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
   const declared = new Set(Object.keys(manifest.dependencies ?? {}));
 
-  // An unpinned range makes a build non-reproducible, which matters for a bot that holds
-  // panel-administrator credentials.
   const unpinned = Object.entries(manifest.dependencies ?? {})
     .filter(([, version]) => /^[\^~><*]|latest/.test(String(version)))
     .map(([name, version]) => `${name}@${version}`);
@@ -465,20 +293,15 @@ async function checkDependencies() {
   const imported = new Set();
 
   for (const file of files) {
-    // Comments are stripped so prose such as `from "could not check"` is not read as a
-    // package specifier. See stripComments for why that phrasing is common here.
+
     const source = stripComments(fs.readFileSync(file, 'utf8'));
 
-    // Bare specifiers only: anything not starting with '.' or '/'.
     for (const match of source.matchAll(/(?:from|import)\s+['"]([^'".\/][^'"]*)['"]/g)) {
       const specifier = match[1];
       if (specifier.startsWith('node:')) continue;
 
-      // A package name never contains whitespace. This is the definitive guard against a
-      // prose match that survived comment stripping — a phrase inside a test name, say.
       if (/\s/.test(specifier)) continue;
 
-      // Strip a subpath, so "discord.js/foo" is checked as "discord.js".
       imported.add(
         specifier.startsWith('@') ? specifier.split('/').slice(0, 2).join('/') : specifier.split('/')[0],
       );
@@ -492,7 +315,6 @@ async function checkDependencies() {
     undeclared.length > 0 ? `not in package.json: ${undeclared.join(', ')}` : '',
   );
 
-  // A declared dependency nobody imports is dead weight, but not a failure.
   const unused = [...declared].filter((name) => !imported.has(name));
   record(
     'No unused dependencies',
@@ -500,8 +322,6 @@ async function checkDependencies() {
     unused.length > 0 ? `declared but not imported: ${unused.join(', ')}` : '',
   );
 
-  // A lockfile is what makes npm ci possible, and setup-node's cache step fails without
-  // one. Information rather than a failure, so a fresh clone still audits cleanly.
   const hasLockfile =
     fs.existsSync(path.join(ROOT, 'package-lock.json')) || fs.existsSync(path.join(ROOT, 'npm-shrinkwrap.json'));
 
@@ -512,37 +332,13 @@ async function checkDependencies() {
   );
 }
 
-/**
- * Every named import resolves to an actual export.
- *
- * The check that catches a whole class of fatal startup failure. A named import that does
- * not exist is a SyntaxError thrown at module instantiation:
- *
- *   SyntaxError: The requested module './x.js' does not provide an export named 'y'
- *
- * Because loadRegistry() imports every command definition during startup, one such import
- * anywhere in the tree stops the bot before the Discord client is constructed — and it is
- * invisible to any check that only reads files without instantiating them.
- *
- * Only relative named imports are verified. Bare specifiers are covered by
- * checkDependencies, and a default import cannot be checked this way.
- *
- * @returns {Promise<void>}
- */
 async function checkImportsResolve() {
   const files = await collect(path.join(ROOT, 'src'));
   const problems = [];
   let checked = 0;
 
-  /** Modules already imported, so a shared utility is loaded once. @type {Map<string, object|Error>} */
   const cache = new Map();
 
-  /**
-   * Imports a module, caching the result or the failure.
-   *
-   * @param {string} absolute
-   * @returns {Promise<object|Error>}
-   */
   async function load(absolute) {
     if (cache.has(absolute)) return cache.get(absolute);
 
@@ -561,8 +357,6 @@ async function checkImportsResolve() {
     const relativeFile = path.relative(ROOT, file);
     const source = fs.readFileSync(file, 'utf8');
 
-    // Matches `import { a, b as c } from './x.js'`, including multi-line forms, since the
-    // negated class spans newlines.
     for (const match of source.matchAll(/import\s*\{([^}]*)\}\s*from\s*['"](\.[^'"]+)['"]/g)) {
       const names = match[1]
         .split(',')
@@ -578,8 +372,6 @@ async function checkImportsResolve() {
         continue;
       }
 
-      // Skip a target that runs on import; nothing in this project imports one, but the
-      // guard keeps the audit from starting the bot if that ever changes.
       if (SELF_EXECUTING.has(path.relative(ROOT, target))) continue;
 
       const module = await load(target);
@@ -606,13 +398,8 @@ async function checkImportsResolve() {
   );
 }
 
-/**
- * No secrets are committed, and .gitignore covers the files that would carry them.
- *
- * @returns {Promise<void>}
- */
 async function checkSecrets() {
-  /** @type {string[]} */
+
   const problems = [];
 
   if (fs.existsSync(path.join(ROOT, '.env'))) {
@@ -626,7 +413,6 @@ async function checkSecrets() {
     if (!gitignore.includes(required)) problems.push(`.gitignore does not cover ${required}`);
   }
 
-  // Scan tracked source and config for credential-shaped strings.
   const files = [
     ...(await collect(path.join(ROOT, 'src'))),
     ...(await collect(path.join(ROOT, 'scripts'))),
@@ -650,11 +436,6 @@ async function checkSecrets() {
   record('No committed secrets', problems.length === 0 ? 'pass' : 'fail', summarise(problems));
 }
 
-/**
- * .env.example documents every variable the code reads, with no real values.
- *
- * @returns {void}
- */
 function checkEnvExample() {
   const examplePath = path.join(ROOT, '.env.example');
 
@@ -666,7 +447,7 @@ function checkEnvExample() {
   const source = fs.readFileSync(examplePath, 'utf8');
 
   const documented = new Set();
-  /** @type {string[]} */
+
   const withValues = [];
 
   for (const line of source.split('\n')) {
@@ -676,7 +457,6 @@ function checkEnvExample() {
     const [, key, value] = match;
     documented.add(key);
 
-    // A value on a secret-bearing key means a real credential may have been committed.
     if (value.trim() !== '' && !ENV_KEYS_WITH_DEFAULTS.has(key)) {
       withValues.push(key);
     }
@@ -697,11 +477,6 @@ function checkEnvExample() {
   );
 }
 
-/**
- * config.json validates, and unfilled placeholders are reported.
- *
- * @returns {Promise<void>}
- */
 async function checkConfig() {
   try {
     const { loadConfig, describeConfig } = await import(
@@ -713,8 +488,6 @@ async function checkConfig() {
 
     const state = describeConfig(config);
 
-    // Expected on a fresh clone: shipping invented panel IDs would produce a bot that
-    // fails at provisioning with an opaque 422.
     record(
       'Egg configuration',
       'info',
@@ -729,8 +502,6 @@ async function checkConfig() {
       state.ready ? 'ready' : 'not ready until at least one egg and deploy.locationId are filled in',
     );
 
-    // A cooldown key that names no real command silently falls back to the default, so the
-    // expensive command it was meant to protect would be unthrottled.
     const { loadRegistry } = await import(pathToFileURL(path.join(ROOT, 'src/commands/registry.js')).href);
     const registry = await loadRegistry(path.join(ROOT, 'src'));
 
@@ -746,11 +517,6 @@ async function checkConfig() {
   }
 }
 
-/**
- * Environment validation rejects bad input and applies documented defaults.
- *
- * @returns {Promise<void>}
- */
 async function checkEnvValidation() {
   try {
     const { loadEnv, normalizePanelUrl, describeEnv } = await import(
@@ -765,14 +531,6 @@ async function checkEnvValidation() {
     }
     record('Missing environment variables are rejected', rejected ? 'pass' : 'fail');
 
-    /**
-     * Deliberately NOT shaped like a real Discord token.
-     *
-     * validateTokenShape only checks for a "Bot " prefix, surrounding quotes and the presence
-     * of a dot, so this satisfies it. Keeping it short means it does not match the credential
-     * patterns THIS SCRIPT scans for — a realistic placeholder makes the audit fail on itself,
-     * and also trips the CI secrets job, which excludes tests/ but not scripts/.
-     */
     const token = 'PLACEHOLDER.FOR.AUDIT';
     const appKey = 'ptla_auditplaceholder0000000000000000';
     const clientKey = 'ptlc_auditplaceholder0000000000000000';
@@ -794,8 +552,6 @@ async function checkEnvValidation() {
 
     record('Environment defaults and normalisation', problems.length === 0 ? 'pass' : 'fail', summarise(problems));
 
-    // A trailing slash and every /api suffix must reduce to the origin, since the service
-    // layer appends /api/application or /api/client itself.
     const normalised =
       normalizePanelUrl('https://panel.example.com/') === 'https://panel.example.com' &&
       normalizePanelUrl('https://panel.example.com/api') === 'https://panel.example.com' &&
@@ -803,11 +559,6 @@ async function checkEnvValidation() {
 
     record('Panel URL normalisation', normalised ? 'pass' : 'fail');
 
-    /**
-     * The startup log prints this projection, so it is the single place a credential is
-     * most likely to reach a log aggregator. A prefix would still narrow a brute-force
-     * search, so no fragment may survive.
-     */
     const described = JSON.stringify(describeEnv(env));
     const leaks = [];
 
@@ -831,16 +582,6 @@ async function checkEnvValidation() {
   }
 }
 
-/**
- * The database creates, migrates, enforces ownership scoping and cascades.
- *
- * Asserts negatives as well as positives. Confirming an owner can find their own server
- * proves very little; confirming that a foreign id finds nothing, that a foreign write
- * changes nothing, that an injection string matches nothing and that an overdraft is
- * refused are the properties a regression would break.
- *
- * @returns {Promise<void>}
- */
 async function checkDatabase() {
   try {
     const { createDatabase, SCHEMA_VERSION } = await import(
@@ -864,11 +605,9 @@ async function checkDatabase() {
 
       const problems = [];
 
-      // The authorisation query must be ownership-scoped in SQL, not in JavaScript.
       if (!db.getOwnedServer('a1b2c3d4', owner)) problems.push('the owner could not find their own server');
       if (db.getOwnedServer('a1b2c3d4', stranger) !== null) problems.push('a foreign owner matched a server');
 
-      // Writes must be scoped too, or a handler that skipped the check could still act.
       if (db.updateServer({ identifier: 'a1b2c3d4', discordId: stranger, name: 'Hijacked' })) {
         problems.push('a foreign owner renamed a server');
       }
@@ -879,7 +618,6 @@ async function checkDatabase() {
         problems.push('a refused foreign write altered the record');
       }
 
-      // Parameterised statements must treat SQL metacharacters as data.
       if (db.getServer("a1b2c3d4'; DROP TABLE servers; --") !== null) {
         problems.push('an injection string matched a row');
       }
@@ -887,7 +625,6 @@ async function checkDatabase() {
         problems.push('the servers table was altered by an injection attempt');
       }
 
-      // The atomic spend must refuse an overdraft rather than going negative.
       db.setCredits(owner, 5);
       if (db.spendCredits(owner, 10)) problems.push('an overdraft was permitted');
       if (db.getCredits(owner) !== 5) problems.push('a refused spend altered the balance');
@@ -909,11 +646,6 @@ async function checkDatabase() {
   }
 }
 
-/**
- * The command tree matches the documented tree, on both surfaces.
- *
- * @returns {Promise<void>}
- */
 async function checkCommandTree() {
   try {
     const { loadRegistry } = await import(pathToFileURL(path.join(ROOT, 'src/commands/registry.js')).href);
@@ -931,8 +663,6 @@ async function checkCommandTree() {
       registry.categories.map((category) => category.name).join(', '),
     );
 
-    // Names and order, per category. Order matters: the documented layout is not
-    // alphabetical in Admin, which leads with `create`, or in General.
     const orderProblems = [];
     for (const [category, expected] of Object.entries(EXPECTED_TREE)) {
       const actual = registry.category(category)?.commands.map((command) => command.name) ?? [];
@@ -948,9 +678,6 @@ async function checkCommandTree() {
       summarise(orderProblems, 2),
     );
 
-    // Reachability is proven by walking the built payload, not by trusting definitions. A
-    // three-word name that failed to become a subcommand group would pass a
-    // definition-based check and vanish from Discord.
     let leaves;
     try {
       leaves = registry.slashLeaves();
@@ -979,16 +706,9 @@ async function checkCommandTree() {
       summarise(noPrefix),
     );
 
-    // Discord rejects a bulk registration wholesale if any element is invalid, reporting
-    // only an array index — so every constraint is checked here where the offending
-    // command can be named.
     const payloadProblems = [];
     const body = registry.slashBody();
 
-    /**
-     * @param {Record<string, unknown>} node
-     * @param {string} label
-     */
     const check = (node, label) => {
       if (!/^[a-z0-9-]{1,32}$/.test(String(node.name))) payloadProblems.push(`${label}: invalid name`);
       if (!node.description) payloadProblems.push(`${label}: missing description`);
@@ -999,7 +719,7 @@ async function checkCommandTree() {
       check(command, command.name);
 
       for (const option of command.options ?? []) {
-        // ApplicationCommandOptionType: 1 = Subcommand, 2 = SubcommandGroup
+
         if (option.type === 1 || option.type === 2) check(option, `${command.name} ${option.name}`);
 
         if (option.type !== 2) continue;
@@ -1017,8 +737,6 @@ async function checkCommandTree() {
       summarise(payloadProblems),
     );
 
-    // Admin commands are gated on this flag in both routers, so a mislabelled command is
-    // either an unguarded privileged operation or one nobody can run.
     const adminOnly = registry.all.filter((command) => command.adminOnly).map((command) => command.name).sort();
     const expectedAdmin = [...EXPECTED_TREE.Admin].sort();
 
@@ -1032,11 +750,6 @@ async function checkCommandTree() {
   }
 }
 
-/**
- * The help menu renders the documented layout.
- *
- * @returns {Promise<void>}
- */
 async function checkHelpLayout() {
   try {
     const { loadRegistry } = await import(pathToFileURL(path.join(ROOT, 'src/commands/registry.js')).href);
@@ -1051,8 +764,6 @@ async function checkHelpLayout() {
     const expectedHeader = `${EXPECTED_COMMAND_COUNT} commands • ${EXPECTED_CATEGORY_COUNT} categories • prefix: kx!`;
     if (header !== expectedHeader) problems.push(`header is "${header}"`);
 
-    // Truncation cuts to exactly the limit and appends three dots, which is what
-    // reproduces the reference layout.
     const truncated = truncateDescription('x'.repeat(60), 51);
     if (truncated !== `${'x'.repeat(51)}...`) {
       problems.push(`truncation produced ${truncated.length} characters`);
@@ -1070,8 +781,6 @@ async function checkHelpLayout() {
     if (server.pages < 2) problems.push('Server does not paginate');
     if (server.components.length !== 3) problems.push(`Server renders ${server.components.length} rows, expected 3`);
 
-    // Every component must be session-scoped, or a stale one could act. The session store
-    // is what authorises a component; a custom id without the token resolves to nothing.
     for (const row of [...account.components, ...server.components]) {
       for (const component of row.toJSON().components) {
         if (component.custom_id && !component.custom_id.endsWith(':audit')) {
@@ -1086,16 +795,8 @@ async function checkHelpLayout() {
   }
 }
 
-/**
- * No unfinished-work markers remain in source.
- *
- * @returns {Promise<void>}
- */
 async function checkPlaceholders() {
-  /**
-   * This script is excluded from its own scan. PLACEHOLDER_PATTERNS necessarily contains
-   * every phrase it searches for, as regex literals, so scanning itself always matches.
-   */
+
   const self = path.join('scripts', 'verify-project.js');
 
   const files = [
@@ -1103,7 +804,6 @@ async function checkPlaceholders() {
     ...(await collect(path.join(ROOT, 'scripts'))),
   ].filter((file) => path.relative(ROOT, file) !== self);
 
-  /** @type {string[]} */
   const offenders = [];
 
   for (const file of files) {
@@ -1120,32 +820,12 @@ async function checkPlaceholders() {
   record('No placeholder markers', offenders.length === 0 ? 'pass' : 'fail', summarise(offenders));
 }
 
-/**
- * Every source file carries the authorship header.
- *
- * @returns {Promise<void>}
- */
-async function checkHeaders() {
-  const files = [...(await collect(path.join(ROOT, 'src'))), ...(await collect(path.join(ROOT, 'scripts')))];
-
-  const missing = files
-    .filter((file) => !fs.readFileSync(file, 'utf8').startsWith(AUTHORSHIP_HEADER))
-    .map((file) => path.relative(ROOT, file));
-
-  record(
-    `Authorship header on every source file (${files.length})`,
-    missing.length === 0 ? 'pass' : 'fail',
-    summarise(missing),
-  );
+async function checkLicense() {
+  const license = fs.readFileSync(path.join(ROOT, 'LICENSE'), 'utf8');
+  record('MIT license and attribution preserved',
+    /MIT License/.test(license) && /Copyright.*Aditya/.test(license) ? 'pass' : 'fail');
 }
 
-// ============================================================================
-// Runner
-// ============================================================================
-
-/**
- * @returns {Promise<void>}
- */
 async function main() {
   const argv = new Set(process.argv.slice(2));
 
@@ -1174,11 +854,6 @@ async function main() {
 
   const quiet = argv.has('--quiet') || argv.has('-q');
 
-  /**
-   * Ordered so the cheapest and most fundamental run first. A missing file or an
-   * unresolved import explains most later failures, so seeing it near the top of the
-   * output saves reading the rest.
-   */
   const checks = [
     checkRequiredFiles,
     checkManifest,
@@ -1192,14 +867,14 @@ async function main() {
     checkCommandTree,
     checkHelpLayout,
     checkPlaceholders,
-    checkHeaders,
+    checkLicense,
   ];
 
   for (const check of checks) {
     try {
       await check();
     } catch (err) {
-      // A check that throws is itself a failure, not a reason to abandon the audit.
+
       record(check.name, 'fail', `the check itself threw: ${err?.message ?? String(err)}`);
     }
   }

@@ -41,8 +41,9 @@ jobs:
       fail-fast: false
       matrix:
         node:
-          - '20'    # the minimum package.json supports
-          - '22'    # the next LTS line; better-sqlite3 compiles per Node ABI
+          - '20'
+          - '22'
+          - '24'
 
     steps:
       # v5 rather than v4: v4 targets Node 20, which is deprecated on runners and
@@ -93,7 +94,7 @@ jobs:
         run: npm run syntax
 
       - name: Audit the project
-        # Structural completeness: expected files, the command tree exactly 24
+        # Structural completeness: expected files, the command tree exactly 25
         # commands in 5 categories, both surfaces wired, config validity, schema
         # application, no placeholders, no committed secrets.
         run: npm run audit

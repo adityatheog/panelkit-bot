@@ -1,38 +1,3 @@
-// Coded by Aditya | GitHub- @adityatheog
-
-/**
- * Tests for src/services/pterodactyl.js.
- *
- * This module is the only place in the project that knows Pterodactyl's HTTP contracts, so the
- * questions worth asking are about the wire: which credential went to which endpoint, what happened
- * to the response envelope, and what the client did when the panel misbehaved.
- *
- * Those cannot be answered by mocking axios. Replacing the transport verifies that the code calls a
- * function, not that it produces a correct request — and the failures this file exists to catch are
- * precisely the ones that live in the request itself: a key sent to the wrong API, a header
- * forwarded across a redirect, a PATCH that omits fields the panel then clears.
- *
- * So these tests run a real HTTP server on an ephemeral loopback port and point the service at it.
- * No network egress, no credentials, no mocking library — and every assertion is against what
- * actually crossed the socket.
- *
- * Five properties get the most attention:
- *
- *   Credential separation. The Application key must reach /api/application and nothing else; the
- *   Client key must reach /api/client and nothing else.
- *
- *   No header forwarding. Redirects are refused outright, because axios follows them by default and
- *   carries the Authorization header to whatever host the panel names.
- *
- *   PATCH read-back. Pterodactyl's PATCH replaces the whole record, so a partial update silently
- *   clears the omitted fields. This is the most damaging mistake available in the API.
- *
- *   Retry asymmetry. A GET may be replayed after an ambiguous failure; a POST may not.
- *
- *   Signed URLs are not panel URLs. fetchSignedFile talks to a node, so the panel bearer token must
- *   not accompany it.
- */
-
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import test, { afterEach, describe } from 'node:test';
@@ -49,7 +14,6 @@ import { AppError, NotFoundError, ValidationError } from '../src/utils/errors.js
 const APP_KEY = 'ptla_testapplicationkey0000000000000000';
 const CLIENT_KEY = 'ptlc_testclientkey00000000000000000000';
 
-/** Servers started during a test, torn down afterwards. */
 const openServers = new Set();
 
 afterEach(async () => {
@@ -64,18 +28,8 @@ afterEach(async () => {
   openServers.clear();
 });
 
-/**
- * Starts a panel double on an ephemeral loopback port.
- *
- * The handler receives the recorded request and returns `{ status, body, headers }`. Every request is
- * recorded in order, which is what lets the tests assert on paths, headers and payloads rather than
- * on call counts alone.
- *
- * @param {(request: { method: string, path: string, query: URLSearchParams, headers: Record<string, string>, body: string }) => { status?: number, body?: unknown, headers?: Record<string, string>, raw?: string }} handler
- * @returns {Promise<{ origin: string, requests: Array<object> }>}
- */
 async function startPanel(handler) {
-  /** @type {Array<object>} */
+
   const requests = [];
 
   const server = http.createServer((incoming, response) => {
@@ -124,13 +78,6 @@ async function startPanel(handler) {
   return { origin: `http://127.0.0.1:${port}`, requests };
 }
 
-/**
- * Builds a service pointed at a panel double.
- *
- * @param {string} origin
- * @param {{ maxRetries?: number, timeoutMs?: number }} [options]
- * @returns {PterodactylService}
- */
 function service(origin, { maxRetries = 1, timeoutMs = 5000 } = {}) {
   return new PterodactylService({
     panelUrl: origin,
@@ -141,12 +88,10 @@ function service(origin, { maxRetries = 1, timeoutMs = 5000 } = {}) {
   });
 }
 
-/** Wraps a payload in Pterodactyl's single-object envelope. */
 function single(attributes) {
   return { object: 'resource', attributes };
 }
 
-/** Wraps a payload in Pterodactyl's list envelope. */
 function list(items, pagination = {}) {
   return {
     object: 'list',
@@ -166,10 +111,7 @@ function list(items, pagination = {}) {
 
 describe('construction', () => {
   test('requires a panel URL and both keys', () => {
-    /**
-     * Reached only through a programming error, since loadEnv validates these — but the service must
-     * not construct half-configured and fail later on the first request.
-     */
+
     for (const missing of ['panelUrl', 'appKey', 'clientKey']) {
       const options = { panelUrl: 'https://panel.example.com', appKey: APP_KEY, clientKey: CLIENT_KEY };
       delete options[missing];
@@ -202,7 +144,7 @@ describe('construction', () => {
   });
 
   test('clamps a nonsensical retry count to at least one attempt', () => {
-    // Zero attempts would mean every call fails without contacting the panel.
+
     assert.doesNotThrow(() => service('https://panel.example.com', { maxRetries: 0 }));
     assert.doesNotThrow(() => service('https://panel.example.com', { maxRetries: NaN }));
   });
@@ -221,10 +163,7 @@ describe('credential separation', () => {
   });
 
   test('sends the Client key to the client API', async () => {
-    /**
-     * Mixing the two is the most common Pterodactyl integration mistake, and the symptom is a 403 from
-     * an endpoint that looks correct.
-     */
+
     const panel = await startPanel(() => ({ body: single({ identifier: 'a1b2c3d4', name: 'Test' }) }));
 
     await service(panel.origin).getClientServer('a1b2c3d4');
@@ -255,7 +194,7 @@ describe('credential separation', () => {
   });
 
   test('identifies itself with a User-Agent', async () => {
-    // Panel operators reading their access log should be able to attribute the traffic.
+
     const panel = await startPanel(() => ({ body: single({ id: 1, username: 'u', email: 'u@x.test' }) }));
 
     await service(panel.origin).getApplicationUser(1);
@@ -266,11 +205,7 @@ describe('credential separation', () => {
 
 describe('redirects are refused', () => {
   test('does not follow a redirect, so the Authorization header cannot leak', async () => {
-    /**
-     * The security property behind maxRedirects: 0. Axios follows redirects by default and forwards the
-     * Authorization header, so a panel that redirected an API path to another host would hand over the
-     * Application key. Refusing turns that into an error.
-     */
+
     const panel = await startPanel((request) => {
       if (request.path === '/api/application/users/7') {
         return { status: 302, headers: { Location: 'http://127.0.0.1:1/stolen' }, body: {} };
@@ -289,10 +224,7 @@ describe('redirects are refused', () => {
 
 describe('response envelope unwrapping', () => {
   test('unwraps a single resource into camelCase', async () => {
-    /**
-     * Callers receive plain objects, so a panel schema change is a one-line edit here rather than a
-     * search across command files.
-     */
+
     const panel = await startPanel(() => ({
       body: single({
         id: 42,
@@ -344,10 +276,7 @@ describe('response envelope unwrapping', () => {
   });
 
   test('reports a missing resource as not found rather than returning undefined', async () => {
-    /**
-     * A 200 with an empty body would otherwise propagate `undefined` into a command and surface as a
-     * property access on nothing.
-     */
+
     const panel = await startPanel(() => ({ status: 200, body: {} }));
 
     await assert.rejects(() => service(panel.origin).getApplicationUser(7), NotFoundError);
@@ -355,10 +284,7 @@ describe('response envelope unwrapping', () => {
   });
 
   test('refuses a create response that omits the identifier', async () => {
-    /**
-     * Without the identifier the bot cannot record or reach the server, so this is a bad response
-     * rather than a success.
-     */
+
     const panel = await startPanel(() => ({ body: single({ id: 501 }) }));
 
     await assert.rejects(
@@ -381,10 +307,7 @@ describe('response envelope unwrapping', () => {
 
 describe('resource readings', () => {
   test('reports absent metrics as null rather than zero', async () => {
-    /**
-     * The panel omits resource fields for a server that has never booted. Reporting zero would be a
-     * measurement the bot cannot support, and the formatters render null as "Unknown".
-     */
+
     const panel = await startPanel(() => ({
       body: single({ current_state: 'offline', is_suspended: false, resources: {} }),
     }));
@@ -401,7 +324,7 @@ describe('resource readings', () => {
   });
 
   test('passes through a genuine zero reading', async () => {
-    // A running server with no network traffic really has transferred zero bytes.
+
     const panel = await startPanel(() => ({
       body: single({
         current_state: 'running',
@@ -417,10 +340,7 @@ describe('resource readings', () => {
   });
 
   test('parses allocations defensively', async () => {
-    /**
-     * The include payload differs between panel versions, so a missing relationship must yield an empty
-     * list rather than throwing.
-     */
+
     const withAllocations = await startPanel(() => ({
       body: single({
         identifier: 'a1b2c3d4',
@@ -459,10 +379,7 @@ describe('resource readings', () => {
 
 describe('egg variables', () => {
   test('detects a required variable from its validation rules', async () => {
-    /**
-     * The `required` keyword in the rules string is what lets serverService report a missing mandatory
-     * variable as a configuration error before any server is created.
-     */
+
     const panel = await startPanel(() => ({
       body: single({
         id: 15,
@@ -494,10 +411,7 @@ describe('egg variables', () => {
   });
 
   test('does not mistake a rule containing the word for a required rule', async () => {
-    /**
-     * `required_if` and `required_with` are distinct Laravel rules that do not make a variable
-     * unconditionally mandatory. Matching them would report a configuration error for a valid egg.
-     */
+
     const panel = await startPanel(() => ({
       body: single({
         id: 15,
@@ -516,7 +430,7 @@ describe('egg variables', () => {
   });
 
   test('normalises a null default value to an empty string', async () => {
-    // serverService compares against '' to decide whether a value is present.
+
     const panel = await startPanel(() => ({
       body: single({
         id: 15,
@@ -542,10 +456,7 @@ describe('egg variables', () => {
 
 describe('PATCH read-back', () => {
   test('resubmits every user field when changing a password', async () => {
-    /**
-     * The most damaging mistake available in this API. PATCH /users/{id} replaces the whole record, so
-     * sending only { password } clears the email and username — silently, with a 200 response.
-     */
+
     const panel = await startPanel((request) => {
       if (request.method === 'GET') {
         return {
@@ -577,10 +488,7 @@ describe('PATCH read-back', () => {
   });
 
   test('resubmits the startup block when changing a container image', async () => {
-    /**
-     * Same hazard on the server side. PATCH /servers/{id}/startup requires the full block, so guessing
-     * the egg, startup command or environment would silently rewrite the server's configuration.
-     */
+
     const panel = await startPanel((request) => {
       if (request.method === 'GET') {
         return {
@@ -644,9 +552,7 @@ describe('server creation', () => {
   });
 
   test('creates the server stopped', async () => {
-    /**
-     * A freshly created server should not consume resources before its owner asks for it.
-     */
+
     const panel = await startPanel(() => ({ body: single({ id: 501, identifier: 'a1b2c3d4' }) }));
 
     await service(panel.origin).createServer({
@@ -667,10 +573,7 @@ describe('server creation', () => {
 
 describe('identifier validation precedes the request', () => {
   test('refuses an invalid identifier without contacting the panel', async () => {
-    /**
-     * The identifier is interpolated into a URL path. Validating first means a traversal attempt costs
-     * no request and cannot reach the panel at all.
-     */
+
     const panel = await startPanel(() => ({ body: single({ identifier: 'a1b2c3d4' }) }));
     const client = service(panel.origin);
 
@@ -713,7 +616,7 @@ describe('identifier validation precedes the request', () => {
 
 describe('power signals', () => {
   test('posts the signal and tolerates an empty 204 response', async () => {
-    // The panel answers 204 with no body, so a client expecting JSON would fail on a success.
+
     const panel = await startPanel(() => ({ status: 204 }));
 
     const sent = await service(panel.origin).sendPowerSignal('a1b2c3d4', 'restart');
@@ -734,10 +637,7 @@ describe('power signals', () => {
 
 describe('file operations', () => {
   test('reads a log file as raw text', async () => {
-    /**
-     * transformResponse is overridden so axios does not JSON-parse a log whose first line happens to
-     * look like JSON — which would silently mangle the file.
-     */
+
     const jsonish = '{"level":"info","msg":"started"}\n{"level":"warn","msg":"slow"}\n';
     const panel = await startPanel(() => ({ raw: jsonish }));
 
@@ -757,7 +657,7 @@ describe('file operations', () => {
   });
 
   test('refuses to compress an empty file list', async () => {
-    // An empty archive request would produce a zero-byte archive the panel then rejects.
+
     const panel = await startPanel(() => ({ body: single({ name: 'archive.tar.gz', size: 1024 }) }));
 
     await assert.rejects(
@@ -769,7 +669,7 @@ describe('file operations', () => {
   });
 
   test('treats an empty delete list as a no-op', async () => {
-    // Cleanup paths call this with whatever they found; nothing to delete is success.
+
     const panel = await startPanel(() => ({ status: 204 }));
 
     assert.equal(await service(panel.origin).deleteFiles('a1b2c3d4', { root: '/', files: [] }), true);
@@ -788,11 +688,7 @@ describe('file operations', () => {
 
 describe('fetchSignedFile', () => {
   test('does not send the panel Authorization header', async () => {
-    /**
-     * The signed URL points at a node, not the panel, and already carries its own signature in the
-     * query string. Attaching the panel bearer token would send the API key to a different machine
-     * for no benefit.
-     */
+
     const node = await startPanel(() => ({ raw: 'archive-bytes' }));
     const panel = await startPanel(() => ({ body: single({ url: `${node.origin}/download?token=signed` }) }));
 
@@ -826,10 +722,7 @@ describe('fetchSignedFile', () => {
   });
 
   test('reports an oversized archive distinctly', async () => {
-    /**
-     * The size limit is enforced by axios itself, so the transfer is aborted rather than buffered. The
-     * distinct code lets the command explain that the archive exceeded the configured limit.
-     */
+
     const node = await startPanel(() => ({ raw: 'x'.repeat(4096) }));
 
     await assert.rejects(
@@ -862,10 +755,7 @@ describe('error normalisation', () => {
   });
 
   test('captures the panel detail without exposing it', async () => {
-    /**
-     * The detail names the offending field, which is valuable to an operator and revealing to a user —
-     * it can disclose egg and node configuration.
-     */
+
     const panel = await startPanel(() => ({
       status: 422,
       body: { errors: [{ code: 'ValidationException', detail: 'The egg field is required.' }] },
@@ -883,10 +773,7 @@ describe('error normalisation', () => {
   });
 
   test('never places a credential in the thrown error', async () => {
-    /**
-     * An axios error carries the full request config, including the Authorization header. The service
-     * normalises before throwing, so the raw error never escapes.
-     */
+
     const panel = await startPanel(() => ({ status: 500, body: { errors: [{ detail: 'boom' }] } }));
 
     let caught;
@@ -902,7 +789,7 @@ describe('error normalisation', () => {
   });
 
   test('reports an unreachable panel as a reachability problem', async () => {
-    // Port 1 on loopback refuses connections immediately.
+
     await assert.rejects(
       () => service('http://127.0.0.1:1').getApplicationUser(7),
       (err) => err instanceof AppError && /could not reach the panel/i.test(err.userMessage),
@@ -911,7 +798,7 @@ describe('error normalisation', () => {
 
   test('reports a timeout without hanging', async () => {
     const panel = await startPanel(() => {
-      // Never respond; the client's timeout must fire.
+
       return new Promise(() => {});
     });
 
@@ -939,10 +826,7 @@ describe('retry behaviour', () => {
   });
 
   test('does not retry a create after a server error', async () => {
-    /**
-     * The property that prevents duplicate servers. A 502 does not tell us whether the panel executed
-     * the request, so a POST must fail rather than replay.
-     */
+
     let attempts = 0;
 
     const panel = await startPanel(() => {
@@ -968,7 +852,7 @@ describe('retry behaviour', () => {
   });
 
   test('does not retry a power signal after a server error', async () => {
-    // Replaying a restart would be visible to the user as a second restart.
+
     let attempts = 0;
 
     const panel = await startPanel(() => {
@@ -982,7 +866,7 @@ describe('retry behaviour', () => {
   });
 
   test('does not retry a 404', async () => {
-    // A missing resource fails identically on every attempt.
+
     let attempts = 0;
 
     const panel = await startPanel(() => {
@@ -1021,19 +905,21 @@ describe('pagination', () => {
     assert.ok(Number(panel.requests[0].query.get('per_page')) <= MAX_PER_PAGE);
   });
 
-  test('filters servers by owner rather than paging the whole panel', async () => {
-    /**
-     * The documented filter, so finding a handful of servers does not require walking every page of a
-     * large panel.
-     */
+  test('filters by the returned owner and never sends unsupported owner_id filters', async () => {
+
     const panel = await startPanel(() => ({
-      body: list([{ id: 1, identifier: 'aaaaaaaa', name: 'One', suspended: false }]),
+      body: list([
+        { id: 1, identifier: 'aaaaaaaa', user: 7, name: 'One', suspended: false },
+        { id: 2, identifier: 'bbbbbbbb', user: 8, name: 'Other owner' },
+        { id: 3, identifier: 'cccccccc', name: 'Unknown owner' },
+      ]),
     }));
 
     const servers = await service(panel.origin).listServersForUser(7);
 
     assert.equal(servers.length, 1);
-    assert.equal(panel.requests[0].query.get('filter[owner_id]'), '7');
+    assert.equal(servers[0].identifier, 'aaaaaaaa');
+    assert.equal(panel.requests[0].query.get('filter[owner_id]'), null);
   });
 
   test('follows every page when listing a user’s servers', async () => {
@@ -1042,7 +928,7 @@ describe('pagination', () => {
     const panel = await startPanel(() => {
       page += 1;
       return {
-        body: list([{ id: page, identifier: `aaaaaaa${page}`, name: `Server ${page}`, suspended: false }], {
+        body: list([{ id: page, identifier: `aaaaaaa${page}`, user: page === 2 ? 8 : 7, name: `Server ${page}`, suspended: false }], {
           total: 3,
           current_page: page,
           total_pages: 3,
@@ -1052,8 +938,50 @@ describe('pagination', () => {
 
     const servers = await service(panel.origin).listServersForUser(7);
 
-    assert.equal(servers.length, 3, 'every page should have been collected');
+    assert.deepEqual(servers.map((entry) => entry.identifier), ['aaaaaaa1', 'aaaaaaa3']);
     assert.equal(panel.requests.length, 3);
+  });
+});
+
+describe('bounded server reconciliation', () => {
+  test('rejects inconsistent pagination instead of silently skipping pages', async () => {
+    const panel = await startPanel(() => ({ body: list([], { current_page: 9, total_pages: 9 }) }));
+    await assert.rejects(() => service(panel.origin).listServersForUser(7), { code: 'PTERO_BAD_RESPONSE' });
+  });
+
+  test('rejects malformed collections rather than treating them as empty', async () => {
+    const panel = await startPanel(() => ({ body: {} }));
+    await assert.rejects(() => service(panel.origin).listServersForUser(7), { code: 'PTERO_BAD_RESPONSE' });
+  });
+
+  test('rejects excessive pagination instead of returning a partial server list', async () => {
+    const panel = await startPanel((request) => ({ body: list([], {
+      current_page: Number(request.query.get('page')), total_pages: 101,
+    }) }));
+    await assert.rejects(() => service(panel.origin).listServersForUser(7), { code: 'PTERO_PAGE_LIMIT' });
+    assert.equal(panel.requests.length, 100);
+  });
+
+  test('rejects an invalid owner before contacting the panel', async () => {
+    const panel = await startPanel(() => ({ body: list([]) }));
+    for (const id of [0, -1, NaN, 'invalid', 1.5]) {
+      await assert.rejects(() => service(panel.origin).listServersForUser(id), { code: 'PTERO_BAD_USER_ID' });
+    }
+    assert.equal(panel.requests.length, 0);
+  });
+
+  test('file traversal and null bytes cannot reach the HTTP boundary', async () => {
+    const panel = await startPanel(() => ({ raw: 'secret' }));
+    for (const file of ['/logs/../secret', '/logs/latest\0.log']) {
+      await assert.rejects(() => service(panel.origin).getFileContents('a1b2c3d4', file), { code: 'PTERO_BAD_PATH' });
+      await assert.rejects(() => service(panel.origin).getDownloadUrl('a1b2c3d4', file), { code: 'PTERO_BAD_PATH' });
+    }
+    assert.equal(panel.requests.length, 0);
+  });
+
+  test('oversized log responses are bounded before attachment construction', async () => {
+    const panel = await startPanel(() => ({ raw: 'x'.repeat(32 * 1024 * 1024 + 1) }));
+    await assert.rejects(() => service(panel.origin).getFileContents('a1b2c3d4', '/logs/latest.log'), AppError);
   });
 });
 
@@ -1068,10 +996,7 @@ describe('deletion', () => {
   });
 
   test('uses the force path only when asked', async () => {
-    /**
-     * Force skips the node's confirmation and is used only when a normal delete has already failed,
-     * so it must never be the default.
-     */
+
     const panel = await startPanel(() => ({ status: 204 }));
 
     await service(panel.origin).deleteServer(501, { force: true });
@@ -1082,10 +1007,7 @@ describe('deletion', () => {
 
 describe('credential verification', () => {
   test('verifies both keys independently', async () => {
-    /**
-     * Reporting each separately is what lets the startup warning name the key at fault, rather than
-     * saying the panel is unreachable when one key is simply wrong.
-     */
+
     const panel = await startPanel((request) => {
       if (request.path.startsWith('/api/application')) return { body: list([], { total: 12 }) };
       return { status: 401, body: { errors: [{ detail: 'Unauthenticated' }] } };
@@ -1116,7 +1038,7 @@ describe('credential verification', () => {
   });
 
   test('requests a single record, to keep the probe cheap', async () => {
-    // Runs on every start, so it must not page the panel.
+
     const panel = await startPanel(() => ({ body: list([]) }));
 
     await service(panel.origin).verifyApplicationKey();
@@ -1138,10 +1060,7 @@ describe('the shared instance', () => {
   });
 
   test('getPterodactyl refuses before initialisation', () => {
-    /**
-     * A clear error beats a TypeError on undefined, since this would only happen through a wiring
-     * mistake in the startup sequence.
-     */
+
     setPterodactylForTests(null);
 
     assert.throws(

@@ -40,7 +40,7 @@ npm run verify
 
 To actually run the bot you need a token, an application ID and two panel API keys — see the README's configuration section. Set `GUILD_ID` during development so slash commands appear instantly rather than propagating for an hour, and `LOG_LEVEL=debug` to see panel request lines.
 
-Node 20.11 or newer is required; the project uses `import.meta.dirname`.
+Node 20.11 or newer is the compatibility floor; use a maintained Node 22 or 24 LTS release for production. Node 20 is end-of-life.
 
 ---
 
@@ -54,11 +54,11 @@ That runs three things, and each catches a different class of problem.
 
 **`npm run syntax`** parses every source file *and imports every module*, so a renamed export or a relative path that lost a `../` fails here rather than at startup. Command definitions are loaded dynamically, so an unresolved import in one of them would otherwise first appear as a failed boot.
 
-**`npm run audit`** checks structural completeness: every expected file present, the command tree exactly 24 commands in 5 categories in the documented order, both surfaces wired, `config.json` valid, the database schema applying, no placeholder markers, no committed secrets.
+**`npm run audit`** checks structural completeness: every expected file present, exactly 25 commands in 5 categories, both surfaces wired, valid configuration, database schema, preserved MIT attribution, no placeholder markers and no committed secrets.
 
-**`npm test`** runs 19 test files with `node:test`. No framework, no credentials.
+**`npm test`** runs 20 test files with `node:test`. No framework or credentials required.
 
-CI runs the same three on Node 20 and Node 22, plus a container build and a secret scan. If `npm run verify` passes locally it will almost certainly pass in CI — the exceptions are Node-version-specific behaviour and the container build, which is why both are in the matrix.
+CI runs these on Node 20, 22 and 24, plus a container build and secret scan. Native dependencies are installed separately for each runtime. Registry availability and version-specific behaviour can still affect CI.
 
 ---
 
@@ -154,7 +154,7 @@ Categories sort alphabetically by default. Admin leads with `create` and General
 
 ### If you change the command count
 
-`scripts/verify-project.js` asserts the tree is exactly 24 visible commands in 5 categories, and `tests/registry.test.js` and `tests/helpMenu.test.js` assert the same. That is not an obstacle to work around — it is the check that catches a command silently renamed or dropped.
+`scripts/verify-project.js` asserts exactly 25 visible commands in 5 categories; registry and help tests assert the same. Update the documented tree and its independent assertions together when deliberately adding or removing a command.
 
 Adding a command means updating `EXPECTED_TREE` and the counts in all three places, deliberately. Or mark it `hidden: true` if it should not appear in help.
 
@@ -257,33 +257,11 @@ There is no linter, deliberately — the rules below are short enough to hold in
 
 **Formatting.** Two-space indentation, single quotes, semicolons, trailing commas in multi-line literals, roughly 120 columns. `.editorconfig` covers the basics.
 
-**JSDoc on exported functions.** Types and a description of what the function is for. Existing modules are the reference.
+**Source clarity.** Prefer descriptive names and small functions over comments. Do not add inline, block or documentation comments to maintained source. Put operational details and API contracts in dedicated documentation; remove unnecessary comments and author notes when rewriting a file.
 
-**Comments explain *why*.** Not what the code does — that is readable. The valuable comments in this project are the ones that name the failure being prevented:
+**British English in prose**, matching the existing documentation.
 
-```js
-/**
- * PATCH /users/{id} replaces the whole record: omitted fields are cleared. The
- * current values are read back and resubmitted so only the password changes.
- * Sending just { password } would blank the email and username.
- */
-```
-
-Not:
-
-```js
-// Get the user, then update the password.
-```
-
-**British English in prose**, matching the existing documentation and comments.
-
-**The authorship header** goes at the top of every `.js`, `.sh`, `.yml` and `.md` file:
-
-```js
-// Coded by Aditya | GitHub- @adityatheog
-```
-
-`npm run audit` checks it. JSON files are exempt, since a comment would make them invalid.
+**Attribution.** Preserve the MIT copyright and licence in `LICENSE`. Source authorship comments are not required; the structural audit checks the licence instead.
 
 **Naming.** `camelCase` for functions and variables, `PascalCase` for classes, `SCREAMING_SNAKE_CASE` for module constants. Database columns are `snake_case` because that is what SQLite holds; the service layer maps them at the boundary.
 

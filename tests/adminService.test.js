@@ -1,33 +1,3 @@
-// Coded by Aditya | GitHub- @adityatheog
-
-/**
- * Tests for src/services/adminService.js.
- *
- * Every method here can act on resources belonging to other people, so the tests are organised around
- * the three properties that make that safe to expose:
- *
- *   Policy bypasses are exactly two, and no more. Admin provisioning skips the Discord account age
- *   check and the per-user server limit, because both are self-service anti-abuse rules. Everything
- *   else — duplicate prevention, credential generation, rollback on a failed local write — is
- *   inherited by delegating to the same services the user-facing commands use.
- *
- *   Bulk operations report per-item outcomes rather than aborting on the first failure. Suspension is
- *   reversible, so getting eight of ten suspended and naming the two that failed is more useful than
- *   an all-or-nothing result. A 409 means the server is already in the requested state, which is the
- *   desired end state and counts as skipped.
- *
- *   Reconciliation never infers absence from ambiguity. Only a 404 proves a server is gone; a 502
- *   during an outage must not be read as "deleted", or a sweep would destroy live mappings for every
- *   user at once.
- *
- * Authorisation is deliberately absent from this file. It is enforced in the routers before any
- * method here is reached, and tested in tests/permissions.test.js — a service-level check would be a
- * second, divergent implementation of the same rule.
- *
- * AccountService and ServerService are real instances over an in-memory database, because the point
- * of several tests is that delegation preserves their guarantees. Only the panel is a double.
- */
-
 import assert from 'node:assert/strict';
 import test, { describe } from 'node:test';
 
@@ -52,7 +22,6 @@ const OTHER = '222222222222222222';
 
 const DAY_MS = 86_400_000;
 
-/** A target account far too new for the 90-day self-service policy. */
 const NEW_TARGET = Object.freeze({ id: TARGET, createdTimestamp: Date.now() - 2 * DAY_MS });
 
 const CONFIG = validateConfig({
@@ -82,15 +51,6 @@ const ENV = Object.freeze({
   startingCredits: 0,
 });
 
-/**
- * Builds a recording double for the panel.
- *
- * Records every call in order, which is what lets a test assert that a refused operation reached the
- * panel not at all, or that a bulk operation continued past a failure.
- *
- * @param {Record<string, Function>} [overrides]
- * @returns {object}
- */
 function mockPanel(overrides = {}) {
   const calls = [];
   let nextUserId = 7;
@@ -99,13 +59,10 @@ function mockPanel(overrides = {}) {
   return {
     calls,
 
-    /** @returns {string[]} the method names called, in order */
     names: () => calls.map(([name]) => name),
 
-    /** @param {string} name @returns {number} how many times it was called */
     countOf: (name) => calls.filter(([called]) => called === name).length,
 
-    /** @param {string} name @returns {boolean} */
     called: (name) => calls.some(([called]) => called === name),
 
     async createUser(payload) {
@@ -208,15 +165,6 @@ function mockPanel(overrides = {}) {
   };
 }
 
-/**
- * Builds an admin service over real account and server services.
- *
- * Real collaborators rather than doubles, because several tests exist to prove that delegation
- * preserves their guarantees — a doubled AccountService would assert nothing about rollback.
- *
- * @param {{ panel?: object, env?: object, config?: object }} [options]
- * @returns {{ db: object, panel: object, service: AdminService, accountService: AccountService, serverService: ServerService }}
- */
 function setup({ panel = mockPanel(), env = ENV, config = CONFIG } = {}) {
   const db = createDatabase(':memory:');
   const locks = createLockManager();
@@ -229,13 +177,6 @@ function setup({ panel = mockPanel(), env = ENV, config = CONFIG } = {}) {
   return { db, panel, service, accountService, serverService };
 }
 
-/**
- * Records a user directly, bypassing the panel.
- *
- * @param {object} db
- * @param {{ discordId?: string, panelId?: number, credits?: number }} [options]
- * @returns {object}
- */
 function seedUser(db, { discordId = TARGET, panelId = 7, credits = 0 } = {}) {
   return db.createUser({
     discordId,
@@ -246,14 +187,6 @@ function seedUser(db, { discordId = TARGET, panelId = 7, credits = 0 } = {}) {
   });
 }
 
-/**
- * Records a server directly, bypassing the panel.
- *
- * @param {object} db
- * @param {string} discordId
- * @param {{ identifier?: string, panelServerId?: number }} [options]
- * @returns {object}
- */
 function seedServer(db, discordId, { identifier = 'a1b2c3d4', panelServerId = 501 } = {}) {
   return db.createServer({
     discordId,
@@ -266,11 +199,7 @@ function seedServer(db, discordId, { identifier = 'a1b2c3d4', panelServerId = 50
 
 describe('listAllServers', () => {
   test('reads the panel rather than the local database', async () => {
-    /**
-     * The point of the command: servers created by hand in the panel are included, and so are servers
-     * whose local record was lost. Reading the local table would hide exactly the discrepancies an
-     * operator is looking for.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -301,10 +230,7 @@ describe('listAllServers', () => {
   });
 
   test('marks a server the bot has no record of', async () => {
-    /**
-     * Two situations produce this, and both matter to an operator: a server created by hand, and the
-     * orphan case where provisioning succeeded and the local write failed.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -337,7 +263,7 @@ describe('listAllServers', () => {
   });
 
   test('returns the panel pagination metadata unchanged', async () => {
-    // The command renders "Page 2 of 3", so the numbers must survive the mapping.
+
     const { service, db } = setup();
 
     try {
@@ -352,10 +278,7 @@ describe('listAllServers', () => {
   });
 
   test('propagates a panel failure rather than reporting an empty panel', async () => {
-    /**
-     * An empty list and an unreachable panel are different answers. Reporting the first for the second
-     * would tell an operator their panel has no servers during an outage.
-     */
+
     const panel = mockPanel({
       async listAllServers() {
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
@@ -427,10 +350,7 @@ describe('lookupUser', () => {
   });
 
   test('reports servers the panel knows about that the bot does not', async () => {
-    /**
-     * The diagnostic value of this command. A user reporting a failed creation whose server is actually
-     * running shows up here, and the operator can then search the log for ORPHANED SERVER.
-     */
+
     const panel = mockPanel({
       async listServersForUser(panelUserId) {
         this.calls.push(['listServersForUser', panelUserId]);
@@ -472,11 +392,7 @@ describe('lookupUser', () => {
   });
 
   test('survives a panel outage, reporting it and skipping reconciliation', async () => {
-    /**
-     * A diagnostic command must still answer during an outage. panelReachable distinguishes "no panel
-     * account" from "could not check", which changes what an operator should conclude about a login
-     * failure.
-     */
+
     const panel = mockPanel({
       async getApplicationUser() {
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
@@ -501,7 +417,7 @@ describe('lookupUser', () => {
   });
 
   test('survives a failed server cross-check without failing the lookup', async () => {
-    // The account details are the primary answer; the reconciliation is a bonus.
+
     const panel = mockPanel({
       async listServersForUser() {
         throw new AppError('forbidden', { code: 'PANEL_HTTP_403', status: 403 });
@@ -523,9 +439,7 @@ describe('lookupUser', () => {
   });
 
   test('reports panel administrator status', async () => {
-    /**
-     * Worth surfacing: a user who is a panel administrator can bypass everything this bot enforces.
-     */
+
     const panel = mockPanel({
       async getApplicationUser(id) {
         this.calls.push(['getApplicationUser', id]);
@@ -553,7 +467,7 @@ describe('lookupUser', () => {
   });
 
   test('never includes a password', async () => {
-    // There is nothing to include: no password is ever stored.
+
     const { service, db } = setup();
 
     try {
@@ -589,10 +503,7 @@ describe('getStatistics', () => {
   });
 
   test('reports the panel as unreachable rather than failing', async () => {
-    /**
-     * The local counts are still useful during an outage, and a diagnostic command that fails when the
-     * thing being diagnosed is down is of no help.
-     */
+
     const panel = mockPanel({
       async listAllServers() {
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
@@ -644,10 +555,7 @@ describe('setSuspended: preconditions', () => {
   });
 
   test('refuses a user with no servers', async () => {
-    /**
-     * Distinguished from a successful no-op, because an operator suspending an abusive user needs to
-     * know the command found nothing to act on.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -675,10 +583,7 @@ describe('setSuspended: preconditions', () => {
   });
 
   test('refuses a bulk operation beyond the ceiling', async () => {
-    /**
-     * A bound on how much one command can do. Past it, an operator should act in the panel rather than
-     * have the bot issue an unbounded burst of requests.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -732,7 +637,7 @@ describe('setSuspended: suspending', () => {
   });
 
   test('acts on the panel server ids, not the identifiers', async () => {
-    // The Application API addresses servers by numeric id.
+
     const { service, panel, db } = setup();
 
     try {
@@ -791,10 +696,7 @@ describe('setSuspended: unsuspending', () => {
   });
 
   test('shares its accounting with the suspend direction', async () => {
-    /**
-     * Both directions run the same code with the flag inverted, so the 409-as-skipped rule and the
-     * per-item failure reporting apply identically.
-     */
+
     const panel = mockPanel({
       async unsuspendServer(id) {
         this.calls.push(['unsuspendServer', id]);
@@ -823,10 +725,7 @@ describe('setSuspended: unsuspending', () => {
 
 describe('setSuspended: per-item outcomes', () => {
   test('counts a 409 as skipped rather than failed', async () => {
-    /**
-     * The panel answers 409 when the server is already in the requested state. The desired end state
-     * has been reached, so reporting it as a failure would send an operator chasing nothing.
-     */
+
     const panel = mockPanel({
       async suspendServer(id) {
         this.calls.push(['suspendServer', id]);
@@ -851,7 +750,7 @@ describe('setSuspended: per-item outcomes', () => {
   });
 
   test('counts a 404 as skipped, since there is nothing to suspend', async () => {
-    // A server deleted directly in the panel cannot be suspended, and that is not a failure.
+
     const panel = mockPanel({
       async suspendServer(id) {
         this.calls.push(['suspendServer', id]);
@@ -875,11 +774,7 @@ describe('setSuspended: per-item outcomes', () => {
   });
 
   test('continues past a failure and names the servers that failed', async () => {
-    /**
-     * Suspension is reversible and partially applied state is recoverable, so eight of ten suspended
-     * with two named is more useful than an all-or-nothing abort. The identifiers are what an operator
-     * needs to finish the job in the panel.
-     */
+
     const panel = mockPanel({
       async suspendServer(id) {
         this.calls.push(['suspendServer', id]);
@@ -909,10 +804,7 @@ describe('setSuspended: per-item outcomes', () => {
   });
 
   test('reports a total failure without throwing', async () => {
-    /**
-     * The command renders the outcome itself, so a wholly failed bulk operation is a result rather than
-     * an exception — the reply names every identifier for manual follow-up.
-     */
+
     const panel = mockPanel({
       async suspendServer(id) {
         this.calls.push(['suspendServer', id]);
@@ -937,10 +829,7 @@ describe('setSuspended: per-item outcomes', () => {
   });
 
   test('the counts always sum to the total', async () => {
-    /**
-     * The command renders all four figures. If they disagreed, an operator could not tell whether
-     * something had been missed.
-     */
+
     const panel = mockPanel({
       async suspendServer(id) {
         this.calls.push(['suspendServer', id]);
@@ -970,10 +859,7 @@ describe('setSuspended: per-item outcomes', () => {
   });
 
   test('does not alter local records', async () => {
-    /**
-     * Suspension is panel state. The bot's mapping must survive, or an unsuspend could not find the
-     * servers it needs to restore.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -992,10 +878,7 @@ describe('setSuspended: per-item outcomes', () => {
 
 describe('provision: the two policy bypasses', () => {
   test('skips the Discord account age policy', async () => {
-    /**
-     * The age check is an anti-abuse rule for open registration. An administrator vouching for someone
-     * supersedes it, and the target here is two days old.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -1018,9 +901,7 @@ describe('provision: the two policy bypasses', () => {
 
     try {
       seedUser(db, { discordId: TARGET, panelId: 7 });
-      // 401 rather than 501: the shared panel double generates 501 for its first created
-      // server, and panel_server_id is UNIQUE — so seeding 501 makes the insert conflict
-      // rather than exercising the limit bypass.
+
       seedServer(db, TARGET, { identifier: 'aaaaaaaa', panelServerId: 401 });
 
       assert.equal(db.countUserServers(TARGET), 1, 'already at the limit of one');
@@ -1034,10 +915,7 @@ describe('provision: the two policy bypasses', () => {
   });
 
   test('the user-facing path still refuses a second server', async () => {
-    /**
-     * The pair that documents the bypass. bypassLimit is reachable only from here, and no user input
-     * path sets it — so the same user who was provisioned a second server cannot provision a third.
-     */
+
     const { service, serverService, db } = setup();
 
     try {
@@ -1055,7 +933,7 @@ describe('provision: the two policy bypasses', () => {
   });
 
   test('nothing else is bypassed: an unavailable egg is still refused', async () => {
-    // Only the two self-service policies differ; every other precondition is inherited.
+
     const { service, db } = setup();
 
     try {
@@ -1106,11 +984,7 @@ describe('provision: credentials', () => {
   });
 
   test('reuses an existing account without regenerating its password', async () => {
-    /**
-     * Regenerating would be simpler and would guarantee the operator has working credentials to hand
-     * over, but it would invalidate the password of an account the user is actively using — breaking
-     * their access for the administrator's convenience.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -1179,7 +1053,7 @@ describe('provision: credentials', () => {
 
 describe('provision: ordering and failure', () => {
   test('creates the account before the server', async () => {
-    // The panel refuses to create a server for a user that does not exist.
+
     const { service, panel, db } = setup();
 
     try {
@@ -1197,11 +1071,7 @@ describe('provision: ordering and failure', () => {
   });
 
   test('keeps a newly created account when the server step fails', async () => {
-    /**
-     * Rolling the account back would be tidier, but its password was already generated and is about to
-     * be delivered — deleting it would send working credentials for an account that no longer exists.
-     * Keeping it means the administrator retries only the server.
-     */
+
     const panel = mockPanel({
       async createServer() {
         throw new AppError('no allocation available', { code: 'PANEL_HTTP_400', status: 400 });
@@ -1224,10 +1094,7 @@ describe('provision: ordering and failure', () => {
   });
 
   test('a retry after a failed server step reuses the account', async () => {
-    /**
-     * The consequence of keeping it. The second attempt must not create a duplicate account, which the
-     * panel would refuse on the unique email anyway.
-     */
+
     let failNext = true;
 
     const panel = mockPanel({
@@ -1288,10 +1155,7 @@ describe('provision: ordering and failure', () => {
   });
 
   test('inherits the rollback when the local account write fails', async () => {
-    /**
-     * Delegation preserves AccountService's guarantee: the panel account is rolled back so the panel and
-     * the database cannot drift.
-     */
+
     const { service, panel, db } = setup();
 
     try {
@@ -1325,10 +1189,7 @@ describe('provision: ordering and failure', () => {
   });
 
   test('tolerates a target with no creation timestamp', async () => {
-    /**
-     * The age policy does not apply on this path, so a partially resolved user object must not break
-     * provisioning.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -1374,10 +1235,7 @@ describe('adjustCredits', () => {
   });
 
   test('refuses a deduction beyond the balance', async () => {
-    /**
-     * Delegated to AccountService, whose spend is a single atomic statement — so the balance cannot go
-     * negative even under a concurrent adjustment.
-     */
+
     const { service, db } = setup();
 
     try {
@@ -1395,7 +1253,7 @@ describe('adjustCredits', () => {
   });
 
   test('refuses a zero or non-numeric adjustment', async () => {
-    // A zero adjustment is a no-op that would still write an audit line.
+
     const { service, db } = setup();
 
     try {
@@ -1413,13 +1271,16 @@ describe('adjustCredits', () => {
     }
   });
 
-  test('truncates a fractional adjustment', async () => {
+  test('refuses fractional and unsafe adjustments without changing the balance', async () => {
     const { service, db } = setup();
 
     try {
       seedUser(db, { discordId: TARGET, panelId: 7, credits: 10 });
 
-      assert.equal(service.adjustCredits({ targetDiscordId: TARGET, amount: 5.9, actorId: ACTOR }).balance, 15);
+      for (const amount of [5.9, -5.9, Number.MAX_SAFE_INTEGER + 1]) {
+        assert.throws(() => service.adjustCredits({ targetDiscordId: TARGET, amount, actorId: ACTOR }), ValidationError);
+        assert.equal(db.getCredits(TARGET), 10);
+      }
     } finally {
       db.close();
     }
@@ -1448,10 +1309,7 @@ describe('adjustCredits', () => {
 
 describe('findStaleServers', () => {
   test('reports a local record whose panel server is gone', async () => {
-    /**
-     * These accumulate when a server is deleted directly in the panel: the local row survives and
-     * counts against the owner's limit, so the user cannot create a replacement.
-     */
+
     const panel = mockPanel({
       async getApplicationServer(id) {
         this.calls.push(['getApplicationServer', id]);
@@ -1496,10 +1354,7 @@ describe('findStaleServers', () => {
   });
 
   test('treats only a 404 as evidence of absence', async () => {
-    /**
-     * The safety property of the whole reconciliation feature. Inferring "deleted" from a 502 would let
-     * a sweep during an outage delete every live mapping in the database.
-     */
+
     for (const status of [400, 403, 409, 500, 502, 503]) {
       const panel = mockPanel({
         async getApplicationServer(id) {
@@ -1569,10 +1424,7 @@ describe('findStaleServers', () => {
   });
 
   test('bounds how many records it checks', async () => {
-    /**
-     * Each check is a panel request, so an unbounded sweep on a large deployment would be a burst of
-     * hundreds. The cap makes the operation predictable.
-     */
+
     const panel = mockPanel({
       async getApplicationServer(id) {
         this.calls.push(['getApplicationServer', id]);
@@ -1646,10 +1498,7 @@ describe('pruneStaleServers', () => {
   });
 
   test('re-verifies each candidate immediately before deleting', async () => {
-    /**
-     * Closes the window between discovery and removal. A server that reappeared — restored from a
-     * backup, or a transient 404 during a node restart — must be left alone.
-     */
+
     const panel = mockPanel({
       async getApplicationServer(id) {
         this.calls.push(['getApplicationServer', id]);
@@ -1678,7 +1527,7 @@ describe('pruneStaleServers', () => {
   });
 
   test('keeps a record when the re-check is inconclusive', async () => {
-    // Any status other than 404 leaves the mapping in place.
+
     const panel = mockPanel({
       async getApplicationServer() {
         throw new AppError('unreachable', { code: 'PANEL_NETWORK_ETIMEDOUT' });
@@ -1705,10 +1554,7 @@ describe('pruneStaleServers', () => {
   });
 
   test('deletes only within the recorded owner', async () => {
-    /**
-     * The delete is ownership-scoped in SQL, so a candidate naming the wrong owner removes nothing —
-     * a mismatched entry cannot delete another user's server.
-     */
+
     const panel = mockPanel({
       async getApplicationServer(id) {
         this.calls.push(['getApplicationServer', id]);
@@ -1783,7 +1629,7 @@ describe('pruneStaleServers', () => {
   });
 
   test('does not touch the user account', async () => {
-    // Pruning removes a server mapping, not a registration.
+
     const panel = mockPanel({
       async getApplicationServer() {
         throw new AppError('not found', { code: 'PANEL_HTTP_404', status: 404 });
@@ -1810,10 +1656,7 @@ describe('pruneStaleServers', () => {
 
 describe('reconciliation end to end', () => {
   test('a server deleted in the panel is found and pruned, freeing the slot', async () => {
-    /**
-     * The scenario the two methods exist for, run in sequence: a user cannot create a replacement
-     * because a phantom record holds their only slot.
-     */
+
     const panel = mockPanel({
       async getApplicationServer(id) {
         this.calls.push(['getApplicationServer', id]);
@@ -1875,10 +1718,7 @@ describe('the shared instance', () => {
   });
 
   test('getAdminService refuses before initialisation', () => {
-    /**
-     * A clear error beats a TypeError on undefined, since this can only happen through a wiring mistake
-     * in the startup sequence.
-     */
+
     setAdminServiceForTests(null);
 
     assert.throws(

@@ -10,7 +10,7 @@
  *
  * Three properties get the most attention:
  *
- *   The tree is exactly 24 visible commands in 5 categories, with the documented names and
+ *   The tree is exactly 25 visible commands in 5 categories, with the documented names and
  *   ordering. The expected tree is written out by hand rather than derived from the registry —
  *   deriving it would make the assertion vacuous.
  *
@@ -52,7 +52,7 @@ const SRC_DIR = path.resolve(import.meta.dirname, '..', 'src');
  */
 const EXPECTED_TREE = Object.freeze({
   Account: ['account create', 'account delete', 'account info', 'account reset'],
-  Admin: ['create', 'admin servers', 'admin suspend', 'admin unsuspend', 'admin user'],
+  Admin: ['create', 'admin prune', 'admin servers', 'admin suspend', 'admin unsuspend', 'admin user'],
   Files: ['files backup'],
   General: ['ping', 'plans', 'help'],
   Server: [
@@ -70,7 +70,7 @@ const EXPECTED_TREE = Object.freeze({
   ],
 });
 
-const EXPECTED_COMMAND_COUNT = 24;
+const EXPECTED_COMMAND_COUNT = 25;
 const EXPECTED_CATEGORY_COUNT = 5;
 
 /**
@@ -374,7 +374,7 @@ describe('the slash payload', () => {
   test('satisfies Discord naming and description constraints', () => {
     /**
      * Checked here because a bulk PUT is all-or-nothing: a single over-long description rejects
-     * all 24 commands with an error naming only an array index.
+     * all 25 commands with an error naming only an array index.
      */
     const check = (node, label) => {
       assert.match(node.name, /^[a-z0-9-]{1,32}$/, `${label} has an invalid name`);

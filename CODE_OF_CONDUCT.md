@@ -34,9 +34,11 @@ PanelKit is infrastructure tooling, so a few situations come up often enough to 
 
 **Beginner questions are welcome.** This project touches Discord's interaction model, the Pterodactyl API, SQLite concurrency and Node's event loop. Nobody arrives knowing all four. A question that a maintainer finds obvious is usually a sign the documentation is unclear, and that is worth fixing.
 
-**Security reports are handled privately and gratefully.** See `SECURITY.md`. Someone who finds a flaw and reports it responsibly has done the project a favour, including when the report turns out to be a misunderstanding.
+**Security reports are handled privately and gratefully.** See [SECURITY.md](SECURITY.md) for reporting routes. Someone who finds a flaw and reports it responsibly has done the project a favour, including when the report turns out to be a misunderstanding.
 
-**Do not publish other people's panel data.** Bug reports frequently include logs. Redact API keys, tokens, signed download URLs, email addresses and Discord IDs belonging to anyone other than yourself. Posting a log that identifies a third party's servers or account is a privacy violation regardless of intent.
+**Do not publish credentials or other people's panel data.** Bug reports frequently include logs. Never post API keys, bot tokens, generated passwords or signed download URLs, including your own. Redact email addresses, Discord/panel IDs and identifying server metadata belonging to others. Log attachments, backups and database dumps may contain credentials or personal data; do not upload them unredacted to issues, pull requests or chat. Posting a log that identifies a third party's servers or account is a privacy violation regardless of intent.
+
+**Use sanitised examples when asking for help.** Follow the [bug-reporting guide](CONTRIBUTING.md#reporting-bugs) and share only the minimal redacted excerpt needed to explain the problem. If credentials were exposed, revoke or reset them rather than relying on editing the post; see the [security policy](SECURITY.md).
 
 **Do not use this project to help anyone attack infrastructure they do not control.** Requests for help bypassing a panel's authorisation, accessing servers belonging to others, or circumventing a host's limits will be closed. Security research against your own instance is welcome and encouraged.
 
@@ -52,7 +54,7 @@ This Code of Conduct applies within all community spaces — the repository's is
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behaviour may be reported to the community leaders responsible for enforcement through the contact listed in `SECURITY.md`, or via GitHub's private reporting on this repository.
+Instances of abusive, harassing, or otherwise unacceptable behaviour may be reported to the community leaders responsible for enforcement through the maintainer contact route described in [SECURITY.md](SECURITY.md). GitHub's private vulnerability reporting is for security vulnerabilities, not a general conduct-reporting inbox. If no private contact method is available, ask the [maintainer](https://github.com/adityatheog) for one without disclosing incident details or personal data publicly.
 
 All complaints will be reviewed and investigated promptly and fairly. Expect an acknowledgement within 72 hours.
 

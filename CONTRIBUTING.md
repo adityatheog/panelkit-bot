@@ -15,6 +15,7 @@ The short version: `npm run verify` must pass, commands go in `src/commands/defi
 - [Adding a command](#adding-a-command)
 - [Architectural rules](#architectural-rules)
 - [Writing tests](#writing-tests)
+- [Maintaining documentation](#maintaining-documentation)
 - [Code style](#code-style)
 - [Commits and pull requests](#commits-and-pull-requests)
 - [Reporting bugs](#reporting-bugs)
@@ -36,9 +37,9 @@ npm ci
 npm run verify
 ```
 
-**`npm run verify` needs no credentials.** Every check is static or runs against an in-memory database with recording doubles, so you can validate a change before you have a Discord token or a panel. That is deliberate: a contribution workflow that requires production credentials is one that discourages contributions.
+**`npm run verify` needs no credentials.** Checks are static or use in-memory SQLite, recording doubles and loopback HTTP servers, so you can validate a change before you have a Discord token or a panel. That is deliberate: a contribution workflow that requires production credentials is one that discourages contributions.
 
-To actually run the bot you need a token, an application ID and two panel API keys — see the README's configuration section. Set `GUILD_ID` during development so slash commands appear instantly rather than propagating for an hour, and `LOG_LEVEL=debug` to see panel request lines.
+To actually run the bot you need a token, an application ID, a panel URL and two panel API keys — see the [README's configuration section](README.md#configuration). Set `GUILD_ID` during development so slash commands appear instantly rather than propagating for an hour, and `LOG_LEVEL=debug` to see panel request lines.
 
 Node 20.11 or newer is the compatibility floor; use a maintained Node 22 or 24 LTS release for production. Node 20 is end-of-life.
 
@@ -52,7 +53,7 @@ npm run verify
 
 That runs three things, and each catches a different class of problem.
 
-**`npm run syntax`** parses every source file *and imports every module*, so a renamed export or a relative path that lost a `../` fails here rather than at startup. Command definitions are loaded dynamically, so an unresolved import in one of them would otherwise first appear as a failed boot.
+**`npm run syntax`** parses source and scripts and imports non-entry-point modules, so a renamed export or a relative path that lost a `../` fails here rather than at startup. Entry points are parsed without being executed, avoiding startup or external side effects. Command definitions are loaded dynamically, so an unresolved import in one of them would otherwise first appear as a failed boot.
 
 **`npm run audit`** checks structural completeness: every expected file present, exactly 25 commands in 5 categories, both surfaces wired, valid configuration, database schema, preserved MIT attribution, no placeholder markers and no committed secrets.
 
@@ -60,36 +61,31 @@ That runs three things, and each catches a different class of problem.
 
 CI runs these on Node 20, 22 and 24, plus a container build and secret scan. Native dependencies are installed separately for each runtime. Registry availability and version-specific behaviour can still affect CI.
 
+`npm run audit` checks this project's structure; `npm audit` separately checks dependency advisories. There is no separate lint, type-check or build script. Syntax/import validation is included in `npm run verify`.
+
 ---
 
 ## Adding a command
 
-One file, in `src/commands/definitions/<category>/`. That single declaration produces the prefix invocation, the nested slash invocation and the help entry — there is nothing to register by hand.
+A definition file in `src/commands/definitions/<category>/` produces the prefix invocation, the nested slash invocation and the help entry. The registry discovers it automatically; add tests and update the structural assertions before registering the new payload with Discord.
 
 ```js
-// Coded by Aditya | GitHub- @adityatheog
-
 import { bulletList, identifierFooter, successEmbed } from '../../../utils/embeds.js';
 import { sanitiseForDisplay } from '../../../utils/format.js';
 
 export default {
-  // One to three lowercase space-separated words. Discord supports at most
-  // command -> group -> subcommand, and the registry enforces that.
   name: 'server example',
 
-  // Must be one of the five existing categories.
   category: 'Server',
 
-  // Shown in the help list, truncated to 51 characters. Max 100 (Discord's limit).
   description: 'Do something with your server',
 
-  // Shown in full in the help detail view. Optional.
   details:
     'A longer explanation, including anything a user needs to know before running it.',
 
-  guildOnly: true,      // false permits direct messages
-  adminOnly: false,     // true gates behind ADMIN_USER_IDS / ADMIN_ROLE_IDS
-  hidden: false,        // true excludes it from help but keeps it invocable
+  guildOnly: true,
+  adminOnly: false,
+  hidden: false,
 
   aliases: ['server ex'],
   examples: ['server example a1b2c3d4'],
@@ -97,7 +93,7 @@ export default {
   options: [
     {
       name: 'server',
-      type: 'string',   // string | integer | user
+      type: 'string',
       description: 'The 8-character server identifier',
       required: true,
       minLength: 8,
@@ -105,16 +101,9 @@ export default {
     },
   ],
 
-  /**
-   * @param {object} ctx the surface-agnostic execution context
-   */
   async execute(ctx) {
-    // Acknowledge before any panel request. An interaction token expires three
-    // seconds after arrival unless acknowledged.
     await ctx.defer();
 
-    // The only authorisation gate. Never query the panel with a user-supplied
-    // identifier that has not passed through this.
     const server = ctx.serverService.requireOwnedServer(ctx.user.id, ctx.args.server);
 
     await ctx.respond({
@@ -129,6 +118,10 @@ export default {
   },
 };
 ```
+
+Names use one to three lowercase space-separated words; Discord supports command → group → subcommand. Use an existing category and a description of at most 100 characters; the help list truncates it using `help.descriptionMax` (51 by default). `details` appears in the full help view. `guildOnly: false` permits DMs, `adminOnly: true` applies admin authorisation, and `hidden: true` hides a command from help without disabling it.
+
+The example acknowledges before doing work and resolves ownership before any panel request. Use service methods for mutations so ownership is revalidated at the service boundary too.
 
 Then register it with Discord:
 
@@ -156,7 +149,7 @@ Categories sort alphabetically by default. Admin leads with `create` and General
 
 `scripts/verify-project.js` asserts exactly 25 visible commands in 5 categories; registry and help tests assert the same. Update the documented tree and its independent assertions together when deliberately adding or removing a command.
 
-Adding a command means updating `EXPECTED_TREE` and the counts in all three places, deliberately. Or mark it `hidden: true` if it should not appear in help.
+Update `EXPECTED_TREE` in `scripts/verify-project.js`, registry/help tests and the command counts and tables in the documentation. A hidden command still needs registry tests and a reachable slash payload.
 
 ---
 
@@ -164,43 +157,46 @@ Adding a command means updating `EXPECTED_TREE` and the counts in all three plac
 
 Five rules. They exist because each one prevents a specific class of bug, and a change that breaks one will be asked to change.
 
-### 1. Commands never touch Discord.js types
+### 1. Use `ctx` for command acknowledgement and replies
 
-Use `ctx`, not `Message` or `ChatInputCommandInteraction`.
+Use `ctx` rather than branching on `Message` or `ChatInputCommandInteraction`. Discord.js builders and component collectors belong to presentation code, not business logic.
 
 ```js
 await ctx.defer({ ephemeral: true });
 await ctx.respond({ embeds: [embed] });
 await ctx.followUp({ content: 'more' });
-const anchor = await ctx.anchorMessage();   // for a component collector
-await ctx.dm({ embeds: [credentials] });    // errors propagate deliberately
+const anchor = await ctx.anchorMessage();
+await ctx.dm({ embeds: [credentials] });
 ```
 
 This is what makes one `execute` serve both surfaces. Reaching for `ctx.interaction` directly means the command works on one surface and breaks on the other.
 
-`ctx.dm()` lets errors propagate while `ctx.respond()` swallows them, and that asymmetry is a security property: DM delivery is how passwords and signed URLs reach a user, so a caller must be able to detect failure and fall back to a message explaining recovery.
+`ctx.anchorMessage()` supplies the message for a component collector. Collectors must verify session ownership, expiry and destructive confirmation state before acting.
+
+`ctx.dm()` lets errors propagate while `ctx.respond()` swallows them, and that asymmetry is a security property: DM delivery is how passwords, signed URLs and log attachments reach a user. Probe deliverability before sensitive work and handle delivery failure with a recovery message, never with a channel fallback.
 
 ### 2. All Pterodactyl HTTP lives in `services/pterodactyl.js`
 
-No other module constructs a panel URL, sets an `Authorization` header or reads a `{ object, attributes }` envelope. Callers receive plain camelCase objects.
+No other module issues panel HTTP requests, sets a panel `Authorization` header or reads a `{ object, attributes }` envelope. Presentation code may build links to the panel UI. API callers receive plain camelCase objects.
 
-If you need a panel endpoint that does not exist yet, add a method there. Two things to know:
+If you need a supported panel endpoint that does not have a wrapper yet, add a method there. Keep these contracts:
 
 - **The Application and Client APIs are separate.** Two axios instances with different keys. Mixing them produces a 403 from an endpoint that looks correct.
-- **Pterodactyl's PATCH replaces the whole record.** `PATCH /users/{id}` with only `{ password }` clears the email and username, silently, with a 200 response. Read the current state back and resubmit it — `updateUserPassword` and `updateServerImage` both do.
+- **Check the update contract per endpoint.** `updateUserPassword` and `updateServerImage` read current state and resubmit the required fields alongside the change. Do not assume a partial payload is accepted or preserves every field; verify it against the panel API and wire-level tests.
+- **Owner filtering is local.** `listServersForUser` validates a positive safe-integer panel user ID, pages `/servers` and compares `attributes.user`. Do not reintroduce unsupported `filter[owner_id]`. Invalid page metadata, non-array collections and more than 100 pages must fail rather than imply absence.
+- **State-changing requests veto retries.** They are not retried even on HTTP 429. Keep response limits: 8 MiB for ordinary API bodies and 32 MiB for log downloads.
 
 ### 3. All SQL lives in `database/db.js`
 
 Prepared and parameterised, always. And ownership goes in the SQL:
 
 ```js
-// Correct: a foreign caller matches zero rows regardless of calling code.
 getOwnedServer: connection.prepare(
   'SELECT * FROM servers WHERE identifier = ? AND discord_id = ?',
 ),
 ```
 
-Not a JavaScript comparison after an unscoped query. A future handler that forgets the check still gets nothing.
+Not a JavaScript comparison after an unscoped query. The scoped query returns no row for a foreign caller; it does not replace the requirement to invoke the ownership gate before panel I/O.
 
 ### 4. Authorisation goes through `requireOwnedServer`
 
@@ -213,24 +209,26 @@ Refuse **before** contacting the panel. Reaching the panel first and refusing af
 Pass objects to the logger, which redacts by key name and value shape:
 
 ```js
-logger.error('Panel request failed', { api, label, status, code });   // yes
-logger.error(`Failed with token ${token}`);                           // no
-logger.error('Failed', { err });                                      // no — err.config holds the header
+logger.error('Panel request failed', { api, label, status, code });
 ```
+
+Never interpolate credentials into messages or pass raw errors to the logger; an axios error's `config` can contain the authorisation header.
 
 Use `toLogMeta(err, context)` for errors. It builds an explicit projection rather than passing the error object, whose axios config carries the `Authorization` header.
 
-### And two more, briefly
+### Additional rules
 
 **Business logic goes in services, not in command files or routers.** A command file should read as presentation: acknowledge, call a service, render the result. If it contains a decision, that decision probably belongs in a service where it can be unit tested.
 
-**Do not invent panel endpoints.** If the documented API cannot do something, say so in a code comment and in the README's limitations section. The websocket-only console constraint is documented in exactly that way, rather than being approximated with something that looks like it works.
+**Do not invent panel endpoints.** Document unsupported capabilities in the README's limitations section, not in new source comments or an invented API approximation. The websocket-only console constraint is one example.
+
+**Keep lifecycle locks consistent.** Account deletion acquires `account:<discordId>` then `servers:<discordId>`; server creation/deletion share the server-owner key. Do not reverse that ordering. Re-entrant acquisition is checked in the caller's async context, not against unrelated queued callers. These locks and component sessions work within one process only.
 
 ---
 
 ## Writing tests
 
-Every module has a test file. New behaviour needs one.
+The 20 test files cover module boundaries and selected command flows. Add regression coverage for new behaviour; extend the relevant suite rather than assuming every module has its own file.
 
 **Assert the negative case.** This is the single most useful habit here. A test that a user can access their own server proves almost nothing; a test that a *stranger* is refused, and that no panel request was made while refusing, proves the property that matters. Look at `tests/serverService.test.js` — the authorisation block is table-driven over twelve methods for exactly this reason.
 
@@ -248,6 +246,26 @@ Run one file while iterating:
 node --test tests/serverService.test.js
 node --test --test-name-pattern="refuses a stranger" tests/
 ```
+
+`tests/commandSafety.test.js` covers private log delivery and destructive confirmation replay/expiry. Also test partial deletion, stale panel-account bindings, concurrent callers, malformed pagination and safe-integer credit boundaries when changing those paths. Passing credentialless tests is not evidence of live Discord or Pterodactyl behaviour; report any live integration gaps explicitly.
+
+---
+
+## Maintaining documentation
+
+Review every tracked Markdown file when behaviour or operator requirements change:
+
+```bash
+git ls-files '*.md'
+```
+
+- [README.md](README.md): command tables/counts, test-file count, exact dependency versions, environment/configuration and deployment instructions.
+- [CONTRIBUTING.md](CONTRIBUTING.md): development commands, architecture, examples and regression expectations.
+- [SECURITY.md](SECURITY.md): implemented protections, data retained, hardening and known limits. Do not describe panel operations as atomic rollbacks.
+- [CHANGELOG.md](CHANGELOG.md): record changes under `Unreleased` until a release is made. Preserve historical versions, dates and dependency tables; state operator actions and slash registration requirements.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): keep reporting links and project-specific privacy guidance current; do not silently change the Contributor Covenant or enforcement policy.
+
+For documentation-only changes, check relative links and heading anchors, run `git diff --check` and `npm run verify`, and identify files deliberately left unchanged in the PR. Preserve the MIT licence and Contributor Covenant attribution.
 
 ---
 
@@ -311,7 +329,7 @@ Open an issue with:
 
 The log lines are usually the most useful part. Every error carries a `code`, and genuine faults carry a reference shown to the user — search for it.
 
-**Never paste an API key or a bot token into an issue.** If you already have, revoke it immediately: git history and issue edit history both retain it.
+**Never paste API keys, bot tokens, generated passwords, signed download URLs or unredacted log/backup contents into an issue.** If you expose a key, token or password, revoke or reset it immediately: git history and issue edit history both retain it. Treat an exposed signed URL as a file disclosure until the URL expires or is invalidated.
 
 ---
 
@@ -333,7 +351,7 @@ Worth knowing what is deliberately out of scope:
 
 ## Security issues
 
-**Do not open a public issue.** See `SECURITY.md` for private reporting.
+**Do not open a public issue.** See [SECURITY.md](SECURITY.md) for private reporting.
 
 That includes anything touching authorisation, credential handling, secret redaction or SQL construction — even if you are not sure it is exploitable. A report that turns out to be a non-issue costs a short conversation; a public disclosure of a real one cannot be undone.
 
